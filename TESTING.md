@@ -44,7 +44,12 @@ and does not substitute for the SIS.
 ## 3. Modbus bridge (round-trip tests)
 
 - **Sensor path (physics → PLC).** Write a known physics value; read it back from the
-  PLC input register; assert equal within scaling tolerance.
+  PLC input register; assert equal within scaling tolerance. Note: the sensor must be
+  injected into a `%MW` **memory word** (holding `1024`), not a `%QW` output — OpenPLC
+  rewrites a `%QW` from the program image every scan, so a master write there never
+  reaches the program (see `ARCHITECTURE.md`). The live round-trip and trip tests must
+  assert the *program reacts* (trip fires at threshold), not just immediate read-back,
+  or they false-pass on a clobbered register.
 - **Actuator path (PLC → physics).** Set a known PLC output coil/register; assert the
   bridge applies the matching command to the physics model.
 - **Register-map conformance.** Every row in the authoritative register map
@@ -70,8 +75,10 @@ honest mirror of a dishonest source).
 
 ## 5. End-to-end acceptance test (the Phase-0 demo)
 
-This is the test that defines "done" for the protected 2-day demo. Run on the single
-anchor scenario.
+This is the test that defines "done" for the protected 2-day demo. It now runs on
+**each of the three scenarios** (tank / vessel / reactor) — every one must pass the
+A–G criteria below. `bridge.run_fake_demo <scenario>` and `bridge.run_live_demo
+<scenario>` print the acceptance verdict; the parameterized bridge tests assert it.
 
 **Sequence**
 1. **Normal.** Start physics, both PLCs, bridge, HMI, 3D view. Process steady; SIS

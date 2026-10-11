@@ -13,8 +13,10 @@ Demo point: SIS trip overridden → HMI stays green while 3D runs to failure.
 ## Phase-0 scope boundary (protected 2-day demo)
 IN:  ONE scenario, Python physics, OpenPLC control+safety, lightweight HMI, Three.js
      ground truth, one Modbus bridge, one attack script. Modbus-only.
-OUT: other scenarios, OpenModelica/FMI, OPC-UA, historian, segmentation, pcap,
+OUT: OpenModelica/FMI, OPC-UA, historian, segmentation, pcap,
      TriStation/Triconex fidelity. Defer all to Phase 1+.
+     (The other two scenarios were OUT for the protected demo; added right after
+     as Phase 0.5 on Python physics — see Scenarios below.)
 Done = live run: normal → inject attack → HMI green while 3D passes failure threshold.
 
 ## Key constraints
@@ -25,10 +27,14 @@ Done = live run: normal → inject attack → HMI green while 3D passes failure 
 - Biggest risk = four-process time-sync over the Modbus bridge, not any one layer.
   Protect Phase 0 by resisting scope creep.
 
-## Scenarios (pick ONE for Phase 0)
-- Vessel overpressure → relief valve (single ODE; easiest)
-- Tank overfill → high-level trip (single ODE; safest Day-1 milestone)
-- Reactor runaway → cooling-jacket trip (2 coupled ODEs, Arrhenius; hardest, Day-2)
+## Scenarios — all three now implemented (Phase 0.5, Python physics)
+The protected demo used ONE; all three now exist on pure-Python ODEs and are
+selectable through every layer (`common/scenarios.py` is the single source of
+per-scenario truth). Still Modbus-only; OpenModelica/validated physics deferred.
+- Tank overfill → high-level trip (single ODE: level; the anchor)
+- Vessel overpressure → relief valve (single ODE: pressure)
+- Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)
+Pick/run a scenario with the `tank|vessel|reactor` arg or `PETROTWIN_SCENARIO`.
 
 ## Repo conventions
 - Docs in repo root: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / this file.

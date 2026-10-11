@@ -1,10 +1,12 @@
 """Standalone attack: compromise the Safety PLC (SIS) over Modbus.
 
 Sets the SIS_OVERRIDE coil, which puts the SIS logic into force/bypass: the
-high-level trip is suppressed and the operator HMI display freezes at its last
-nominal value, while the true process runs to overflow. This is the Triton
-attack PATTERN expressed over Modbus (a forced-override register write), NOT
-Triton's TriStation/Triconex program-injection MECHANISM — see OVERVIEW.md.
+high-high trip is suppressed and the operator HMI display freezes at its last
+nominal value, while the true process runs to failure. This works for every
+scenario (tank / vessel / reactor) unchanged — it targets the SIS override coil,
+which is scenario-independent. This is the Triton attack PATTERN expressed over
+Modbus (a forced-override register write), NOT Triton's TriStation/Triconex
+program-injection MECHANISM — see OVERVIEW.md.
 
 Usage (needs the venv + SIS reachable):
     .venv/bin/python -m attack.attack            # launch the attack

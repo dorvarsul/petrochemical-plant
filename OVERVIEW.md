@@ -76,8 +76,11 @@ Each scenario maps to a real plant unit and the SIS interlock the attack disable
 | **Tank overfill**       | Tank overflow / spill   | High-level trip     | Single ODE (mass balance)                                            | Safest Day-1 milestone      |
 | **Reactor runaway**     | Exothermic runaway      | Cooling-jacket trip | Two coupled ODEs (temperature + concentration, Arrhenius feedback)   | Hardest — Day-2 stretch     |
 
-Only **one** scenario is built for the Phase-0 demo. The others arrive in later
-phases (see `ROADMAP.md`).
+The protected Phase-0 demo used **one** scenario; all three are now implemented on
+pure-Python ODE physics and are selectable through every layer (Phase 0.5). Physics
+realism for them — validated OpenModelica models, real geometry, relief sizing — is
+still a later phase (see `ROADMAP.md`). The reactor model in particular is tuned for a
+legible runaway, not plant fidelity.
 
 ## Honest scope limit (read this)
 

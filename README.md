@@ -16,17 +16,28 @@ future sessions: **[CLAUDE.md](CLAUDE.md)**.
 This is the Triton attack **pattern**, not its **mechanism** (OpenPLC ≠ Triconex;
 Modbus override, not a TriStation exploit). See the scope limit in `OVERVIEW.md`.
 
-## Phase 0 — status: **tank-overfill scenario, working end to end (live)**
+## Status: **all three scenarios, working end to end (live)**
 
-The anchor scenario is **tank overfill → high-level trip**. The full divergence
-runs both offline (fake PLCs) and live (two real OpenPLC v3 instances over Modbus).
+Three scenarios share one control/attack shape and are selectable everywhere:
+
+| id | scenario | PV | SIS trip | failure |
+|----|----------|----|----------|---------|
+| `tank` | tank overfill | level (m) | 9 m | overflow at 10 m |
+| `vessel` | vessel overpressure | pressure (bar) | 16 bar | rupture at 20 bar |
+| `reactor` | reactor runaway | temperature (°C) | 110 °C | runaway at 300 °C |
+
+Each runs the full divergence both offline (fake PLCs) and live (two real OpenPLC v3
+instances over Modbus). Physics is pure-Python ODEs tuned for a legible demo, not
+plant fidelity (OpenModelica realism is a later phase).
 
 ## Quick start
 
 ### Offline — no Docker (pure stdlib)
 ```bash
-python3 -m unittest discover -s tests      # 34 tests
-python3 -m bridge.run_fake_demo            # normal -> attack -> overflow, HMI frozen
+python3 -m unittest discover -s tests          # 68 tests
+python3 -m bridge.run_fake_demo                # tank (default)
+python3 -m bridge.run_fake_demo vessel         # or vessel / reactor
+python3 -m bridge.run_fake_demo reactor        # normal -> attack -> failure, HMI frozen
 ```
 
 ### Live — Docker + real OpenPLC + the dashboard
@@ -37,19 +48,21 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # 1. Build + start the two OpenPLC v3 slaves
 cd plc && docker compose build && docker compose up -d && cd ..
 
-# 2. Load + compile + start the two ST programs (headless)
-python3 plc/load_program.py http://127.0.0.1:8081 plc/bpcs/bpcs.st "BPCS fill control"
-python3 plc/load_program.py http://127.0.0.1:8082 plc/sis/sis.st  "SIS high-level trip"
+# 2. Load + compile + start the BPCS + the SIS program for a scenario (headless)
+.venv/bin/python -m plc.load_scenario tank     # or vessel / reactor
 
 # 3. (optional) verify the live Modbus round-trip
 PETROTWIN_LIVE=1 .venv/bin/python -m unittest tests.test_bridge_live -v
 
 # 4a. Terminal demo over real Modbus
-.venv/bin/python -m bridge.run_live_demo
+.venv/bin/python -m bridge.run_live_demo tank  # or vessel / reactor
 
 # 4b. Or the split-screen dashboard (HMI | 3D ground truth)
-.venv/bin/python -m ui.server        # open http://127.0.0.1:8090 , click "Inject attack"
+.venv/bin/python -m ui.server    # open http://127.0.0.1:8090 , pick a scenario, "Inject attack"
 ```
+
+The dashboard loads the chosen scenario's PLC programs itself (step 2 is for the
+terminal demo / tests); its dropdown switches scenarios live by recompiling the SIS.
 
 The attack can also be launched from the CLI:
 ```bash
@@ -59,13 +72,16 @@ The attack can also be launched from the CLI:
 
 ## Layout
 ```
-physics/      tank ODE model (ground truth)            + tests/test_tank.py
-common/       registers.py — authoritative Modbus map  + tests/test_registers.py
-plc/          bpcs.st, sis.st, docker-compose, load_program.py  (OpenPLC v3)
-bridge/       Modbus bridge loop; fake + real PLC clients; demos
+common/       scenarios.py — per-scenario truth (PV, scaling, thresholds, physics)
+              registers.py — authoritative Modbus map   + tests/test_{scenarios,registers}.py
+physics/      base.py + tank.py / vessel.py / reactor.py ODE models (ground truth)
+              make_model(id) factory   + tests/test_{tank,vessel,reactor}.py
+plc/          bpcs.st (shared), sis.st (template), load_scenario.py, docker-compose (OpenPLC v3)
+              + tests/test_plc_programs.py
+bridge/       scenario-agnostic Modbus bridge loop; fake + real PLC clients; demos
               + tests/test_bridge.py (fake) / test_bridge_live.py (real, opt-in)
-ui/           server.py + static/dashboard.html (HMI + Three.js 3D)
-attack/       attack.py — SIS_OVERRIDE over Modbus
+ui/           server.py + static/dashboard.html (HMI + Three.js 3D, scenario selector)
+attack/       attack.py — SIS_OVERRIDE over Modbus (scenario-independent)
 ```
 
 Default tests are dependency-free (stdlib `unittest`); `pymodbus`/`pyserial`
