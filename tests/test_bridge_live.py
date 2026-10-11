@@ -20,8 +20,11 @@ import time
 import unittest
 
 from common import registers as R
+from common import scenarios
 
 LIVE = os.environ.get("PETROTWIN_LIVE") == "1"
+# The live SIS must have the matching scenario program loaded (default tank).
+SC = scenarios.get(os.environ.get("PETROTWIN_SCENARIO", scenarios.DEFAULT_SCENARIO))
 
 
 def _plc_available():
@@ -66,12 +69,12 @@ class TestLiveRoundTrip(unittest.TestCase):
         return last == expected
 
     def test_sensor_holding_round_trip(self):
-        # Write a level into each PLC's sensor register, read it straight back.
+        # Write a PV into each PLC's sensor register, read it straight back.
         for value in (0, 2000, 5000):
-            self.bpcs.write_holding(R.BpcsHolding.LEVEL_PV, value)
-            self.sis.write_holding(R.SisHolding.LEVEL_PV, value)
-            self.assertEqual(self.bpcs.read_holding(R.BpcsHolding.LEVEL_PV), value)
-            self.assertEqual(self.sis.read_holding(R.SisHolding.LEVEL_PV), value)
+            self.bpcs.write_holding(R.BpcsHolding.PV, value)
+            self.sis.write_holding(R.SisHolding.PV, value)
+            self.assertEqual(self.bpcs.read_holding(R.BpcsHolding.PV), value)
+            self.assertEqual(self.sis.read_holding(R.SisHolding.PV), value)
 
     def test_bpcs_drives_feed_open(self):
         # With bpcs.st running, the fill-valve command should read fully open.
@@ -86,8 +89,9 @@ class TestLiveRoundTrip(unittest.TestCase):
 
     def test_trip_then_override_suppresses_it(self):
         # Healthy SIS: at/above the threshold the trip asserts.
+        above_trip = min(SC.reg_full_scale, SC.trip_reg + 500)
         self.sis.write_coil(R.SisCoil.OVERRIDE, False)
-        self.sis.write_holding(R.SisHolding.LEVEL_PV, 9500)
+        self.sis.write_holding(R.SisHolding.PV, above_trip)
         self.assertTrue(self._wait_coil(self.sis, R.SisCoil.TRIP_CMD, True),
                         "trip did not assert at/above threshold")
         # Attack: override suppresses the trip command regardless of level.

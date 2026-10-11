@@ -1,8 +1,9 @@
 """Tests for the shared register map (common/registers.py).
 
-Guards the single source of truth: scaling round-trips, clamping at range
-edges, and the per-instance address-space / metadata invariants described in
-ARCHITECTURE.md.
+Guards the single source of truth: valve scaling round-trips and clamps, and the
+per-instance address-space / metadata invariants described in ARCHITECTURE.md.
+Per-scenario PV scaling lives in common/scenarios.py and is covered by
+test_scenarios.py.
 """
 
 import unittest
@@ -10,16 +11,7 @@ import unittest
 from common import registers as R
 
 
-class TestScaling(unittest.TestCase):
-    def test_level_round_trip(self):
-        for m in (0.0, 0.123, 5.0, 9.0, 10.0):
-            self.assertAlmostEqual(R.reg_to_level(R.level_to_reg(m)), m, places=3)
-
-    def test_level_clamps_to_range(self):
-        self.assertEqual(R.level_to_reg(-1.0), 0)
-        self.assertEqual(R.level_to_reg(999.0), R.LEVEL_REG_MAX)
-        self.assertLessEqual(R.level_to_reg(10.0), R.REG_U16_MAX)
-
+class TestValveScaling(unittest.TestCase):
     def test_valve_round_trip(self):
         for f in (0.0, 0.4, 0.5, 1.0):
             self.assertAlmostEqual(R.reg_to_valve(R.valve_to_reg(f)), f, places=3)
@@ -29,18 +21,21 @@ class TestScaling(unittest.TestCase):
         self.assertEqual(R.valve_to_reg(5.0), R.VALVE_REG_MAX)
         self.assertEqual(R.reg_to_valve(99999), 1.0)
 
+    def test_valve_range_fits_u16(self):
+        self.assertLessEqual(R.VALVE_REG_MAX, R.REG_U16_MAX)
+
 
 class TestMapInvariants(unittest.TestCase):
     def test_every_register_has_info(self):
         keys = set(R.REGISTERS)
         expected = {
-            (R.Instance.BPCS, "holding", R.BpcsHolding.LEVEL_PV),
+            (R.Instance.BPCS, "holding", R.BpcsHolding.PV),
             (R.Instance.BPCS, "holding", R.BpcsHolding.FEED_CMD),
             (R.Instance.SIS, "coil", R.SisCoil.TRIP_CMD),
             (R.Instance.SIS, "coil", R.SisCoil.TRIP_STATUS),
             (R.Instance.SIS, "coil", R.SisCoil.OVERRIDE),
-            (R.Instance.SIS, "holding", R.SisHolding.LEVEL_PV),
-            (R.Instance.SIS, "holding", R.SisHolding.LEVEL_HMI),
+            (R.Instance.SIS, "holding", R.SisHolding.PV),
+            (R.Instance.SIS, "holding", R.SisHolding.PV_HMI),
         }
         self.assertEqual(keys, expected)
 
@@ -67,7 +62,7 @@ class TestMapInvariants(unittest.TestCase):
                 self.assertEqual(info.st_var, f"%QW{int(addr)}")
 
     def test_qx_mapping_matches_address(self):
-        # OpenPLC %QXn.m -> coil n*8+m; Phase-0 coils live in byte 0.
+        # OpenPLC %QXn.m -> coil n*8+m; coils live in byte 0.
         for (_inst, table, addr), info in R.REGISTERS.items():
             if table == "coil":
                 self.assertEqual(info.st_var, f"%QX0.{int(addr)}")
@@ -76,10 +71,6 @@ class TestMapInvariants(unittest.TestCase):
         self.assertEqual(set(R.ENDPOINTS), set(R.Instance))
         ports = [p for _h, p in R.ENDPOINTS.values()]
         self.assertEqual(len(ports), len(set(ports)))
-
-    def test_ranges_fit_u16(self):
-        self.assertLessEqual(R.LEVEL_REG_MAX, R.REG_U16_MAX)
-        self.assertLessEqual(R.VALVE_REG_MAX, R.REG_U16_MAX)
 
 
 if __name__ == "__main__":

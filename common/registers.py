@@ -1,9 +1,18 @@
-"""Authoritative Modbus register map (Phase 0, tank-overfill scenario).
+"""Authoritative Modbus register map (shared across all scenarios).
 
 Single source of truth. The Modbus bridge, both OpenPLC programs, the HMI, and
 the attack script all import addresses, scaling, and ranges from here — never
-hard-code them per file. Mirrors the "Register map — Phase 0" tables in
-ARCHITECTURE.md; if one changes, change both.
+hard-code them per file. Mirrors the "Register map" tables in ARCHITECTURE.md;
+if one changes, change both.
+
+The map is **structurally identical for every scenario** — same instances,
+tables, addresses, and directions. Only the *interpretation* of the process
+variable (PV) register changes: tank level (mm), vessel pressure (cbar), or
+reactor temperature (ddeg C). That per-scenario interpretation — the integer
+scaling and the high-high trip threshold — lives in ``common/scenarios.py``, so
+PV values are converted with ``scenario.pv_to_reg`` / ``scenario.reg_to_pv``
+rather than a fixed level conversion here. The valve/actuator command is a
+scenario-independent per-mille fraction and is scaled here.
 
 Topology: two OpenPLC instances, each a separate Modbus slave with its OWN
 address space starting at 0. A register is addressed by (instance, table,
@@ -18,10 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
-# --- Scaling ---------------------------------------------------------------
-LEVEL_MM_PER_M = 1000   # level register = round(level_m * 1000), unit = mm
+# --- Scaling (PV scaling is per-scenario; see common/scenarios.py) ---------
 VALVE_PER_MILLE = 1000  # valve register = round(fraction * 1000), unit = per-mille
-LEVEL_REG_MAX = 10000   # 10.0 m full scale
 VALVE_REG_MAX = 1000    # fully open
 REG_U16_MAX = 65535     # Modbus 16-bit register ceiling
 
@@ -42,22 +49,22 @@ ENDPOINTS = {
 # --- BPCS (Control PLC) registers ------------------------------------------
 class BpcsHolding(IntEnum):
     """BPCS holding registers (master read/write)."""
-    LEVEL_PV = 0  # %QW0  physics -> PLC (mm); program reads
+    PV = 0        # %QW0  physics -> PLC (scaled PV); program reads
     FEED_CMD = 1  # %QW1  PLC -> physics (per-mille); program writes
 
 
 # --- SIS (Safety PLC) registers --------------------------------------------
 class SisCoil(IntEnum):
     """SIS coils (master read/write)."""
-    TRIP_CMD = 0     # %QX0.0  PLC -> physics; 1 = force feed shut
+    TRIP_CMD = 0     # %QX0.0  PLC -> physics; 1 = force protective action
     TRIP_STATUS = 1  # %QX0.1  PLC -> HMI;     1 = tripped, 0 = armed-normal
     OVERRIDE = 2     # %QX0.2  attack -> PLC;  1 = force/bypass (program reads)
 
 
 class SisHolding(IntEnum):
     """SIS holding registers (master read/write)."""
-    LEVEL_PV = 0   # %QW0  physics -> PLC (mm); program reads
-    LEVEL_HMI = 1  # %QW1  PLC -> HMI (mm); frozen under OVERRIDE
+    PV = 0      # %QW0  physics -> PLC (scaled PV); program reads
+    PV_HMI = 1  # %QW1  PLC -> HMI (scaled PV); frozen under OVERRIDE
 
 
 @dataclass(frozen=True)
@@ -66,13 +73,13 @@ class RegInfo:
     table: str      # "coil" | "holding"
     st_var: str     # OpenPLC located variable, e.g. "%QW0" / "%QX0.2"
     direction: str  # "physics->PLC" | "PLC->physics" | "PLC->HMI" | "attack->PLC"
-    units: str      # "mm" | "per-mille" | "bool"
+    units: str      # "pv (scaled)" | "per-mille" | "bool"
 
 
 # Flat metadata view keyed by (instance, table, address).
 REGISTERS = {
-    (Instance.BPCS, "holding", BpcsHolding.LEVEL_PV):
-        RegInfo(Instance.BPCS, "holding", "%QW0", "physics->PLC", "mm"),
+    (Instance.BPCS, "holding", BpcsHolding.PV):
+        RegInfo(Instance.BPCS, "holding", "%QW0", "physics->PLC", "pv (scaled)"),
     (Instance.BPCS, "holding", BpcsHolding.FEED_CMD):
         RegInfo(Instance.BPCS, "holding", "%QW1", "PLC->physics", "per-mille"),
     (Instance.SIS, "coil", SisCoil.TRIP_CMD):
@@ -81,26 +88,16 @@ REGISTERS = {
         RegInfo(Instance.SIS, "coil", "%QX0.1", "PLC->HMI", "bool"),
     (Instance.SIS, "coil", SisCoil.OVERRIDE):
         RegInfo(Instance.SIS, "coil", "%QX0.2", "attack->PLC", "bool"),
-    (Instance.SIS, "holding", SisHolding.LEVEL_PV):
-        RegInfo(Instance.SIS, "holding", "%QW0", "physics->PLC", "mm"),
-    (Instance.SIS, "holding", SisHolding.LEVEL_HMI):
-        RegInfo(Instance.SIS, "holding", "%QW1", "PLC->HMI", "mm"),
+    (Instance.SIS, "holding", SisHolding.PV):
+        RegInfo(Instance.SIS, "holding", "%QW0", "physics->PLC", "pv (scaled)"),
+    (Instance.SIS, "holding", SisHolding.PV_HMI):
+        RegInfo(Instance.SIS, "holding", "%QW1", "PLC->HMI", "pv (scaled)"),
 }
 
 
-# --- Scaling helpers -------------------------------------------------------
+# --- Valve scaling helpers (scenario-independent) --------------------------
 def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
-
-
-def level_to_reg(level_m: float) -> int:
-    """Metres -> level register (mm), clamped to the register range."""
-    return int(round(_clamp(level_m * LEVEL_MM_PER_M, 0, LEVEL_REG_MAX)))
-
-
-def reg_to_level(reg: int) -> float:
-    """Level register (mm) -> metres."""
-    return reg / LEVEL_MM_PER_M
 
 
 def valve_to_reg(fraction: float) -> int:

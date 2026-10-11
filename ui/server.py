@@ -16,6 +16,7 @@ then open http://127.0.0.1:8090/
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,8 +25,11 @@ from pathlib import Path
 from bridge.bridge import Bridge
 from bridge.plc_io import ModbusPlc
 from common import registers as R
-from physics.tank import TankModel
+from common import scenarios
+from physics import make_model
 from plc.load_program import restart_runtime
+
+SCENARIO = os.environ.get("PETROTWIN_SCENARIO", scenarios.DEFAULT_SCENARIO)
 
 STATIC = Path(__file__).parent / "static"
 HOST, PORT = "127.0.0.1", 8090
@@ -40,11 +44,15 @@ class SimRunner(threading.Thread):
         self._attack = False
         self._reset = False
         self._stop = False
-        self._snap = {"time": 0.0, "truth": {"level": 5.0, "fraction": 0.5,
-                      "overflowing": False}, "hmi": {"level": 5.0, "fraction": 0.5,
-                      "trip_status": False}, "feed": 1.0, "trip": False,
-                      "attacked": False}
-        self.tank = TankModel(q_out=0.0, level0=5.0)
+        self.scenario = scenarios.get(SCENARIO)
+        self.model = make_model(SCENARIO)
+        f0 = self.scenario.fraction(self.scenario.pv0)
+        self._snap = {"time": 0.0,
+                      "truth": {"level": self.scenario.pv0, "fraction": f0,
+                                "overflowing": False},
+                      "hmi": {"level": self.scenario.pv0, "fraction": f0,
+                              "trip_status": False},
+                      "feed": 1.0, "trip": False, "attacked": False}
         self.bpcs = self.sis = self.bridge = None  # connected in run(), after reset
 
     def _connect(self, attempts=12):
@@ -59,7 +67,7 @@ class SimRunner(threading.Thread):
             try:
                 self.bpcs = ModbusPlc.for_instance(R.Instance.BPCS)
                 self.sis = ModbusPlc.for_instance(R.Instance.SIS)
-                self.bridge = Bridge(self.tank, self.bpcs, self.sis, dt=DT)
+                self.bridge = Bridge(self.model, self.bpcs, self.sis, dt=DT)
                 return
             except Exception as e:
                 last = e
@@ -86,18 +94,18 @@ class SimRunner(threading.Thread):
                 time.sleep(0.5)
                 self._connect()
             time.sleep(SETTLE)
-        self.tank.reset()
+        self.model.reset()
 
     def _publish(self, s, attacked):
-        H = self.tank.height_full
+        H = self.scenario.pv_full_scale
         with self._lock:
             self._snap = {
                 "time": round(s.time, 1),
-                "truth": {"level": round(s.true_level, 3),
-                          "fraction": round(self.tank.fraction, 4),
-                          "overflowing": self.tank.overflowing},
-                "hmi": {"level": round(s.hmi_level, 3),
-                        "fraction": round(min(max(s.hmi_level / H, 0.0), 1.0), 4),
+                "truth": {"level": round(s.true_pv, 3),
+                          "fraction": round(self.model.fraction, 4),
+                          "overflowing": self.model.failed},
+                "hmi": {"level": round(s.hmi_pv, 3),
+                        "fraction": round(min(max(s.hmi_pv / H, 0.0), 1.0), 4),
                         "trip_status": s.hmi_trip_status},
                 "feed": round(s.feed, 3),
                 "trip": s.trip_cmd,

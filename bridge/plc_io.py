@@ -11,7 +11,9 @@ Two implementations behind one small interface:
   Same interface, so the bridge code is identical for fake and real PLCs.
 
 The fake PLCs and the ST programs must stay in lock-step: if one changes, change
-the other. ``SIS_TRIP_HH`` here mirrors ``TRIP_HH`` in ``sis.st``.
+the other. ``FakeSis`` is given the scenario's high-high trip threshold in
+register units (``scenario.trip_reg``), which mirrors the ``TRIP_HH`` constant
+compiled into the matching ``plc/sis/sis_<scenario>.st`` program.
 """
 
 from __future__ import annotations
@@ -19,9 +21,6 @@ from __future__ import annotations
 from typing import Protocol
 
 from common import registers as R
-
-# High-high level trip threshold, in mm — mirrors TRIP_HH in plc/sis/sis.st.
-SIS_TRIP_HH = 9000
 
 
 class PlcClient(Protocol):
@@ -41,10 +40,10 @@ class PlcClient(Protocol):
 # Fake PLCs (mirror the ST programs)
 # --------------------------------------------------------------------------
 class FakeBpcs:
-    """In-memory Control PLC — mirrors plc/bpcs/bpcs.st (run the fill)."""
+    """In-memory Control PLC — mirrors plc/bpcs/bpcs.st (run the process)."""
 
     def __init__(self) -> None:
-        self._holding = {int(R.BpcsHolding.LEVEL_PV): 0,
+        self._holding = {int(R.BpcsHolding.PV): 0,
                          int(R.BpcsHolding.FEED_CMD): 0}
 
     def read_coil(self, addr: int) -> bool:
@@ -68,14 +67,21 @@ class FakeBpcs:
 
 
 class FakeSis:
-    """In-memory Safety PLC — mirrors plc/sis/sis.st (latched trip + override)."""
+    """In-memory Safety PLC — mirrors plc/sis/sis_<scenario>.st.
 
-    def __init__(self) -> None:
+    ``trip_hh_reg`` is the high-high trip threshold in register units
+    (``scenario.trip_reg``), the same constant compiled into the matching ST
+    program. Logic (latched high-high trip + override force/bypass) is identical
+    across scenarios; only this threshold differs.
+    """
+
+    def __init__(self, trip_hh_reg: int) -> None:
+        self.trip_hh_reg = int(trip_hh_reg)
         self._coil = {int(R.SisCoil.TRIP_CMD): False,
                       int(R.SisCoil.TRIP_STATUS): False,
                       int(R.SisCoil.OVERRIDE): False}
-        self._holding = {int(R.SisHolding.LEVEL_PV): 0,
-                         int(R.SisHolding.LEVEL_HMI): 0}
+        self._holding = {int(R.SisHolding.PV): 0,
+                         int(R.SisHolding.PV_HMI): 0}
         self._tripped = False  # latched trip state
 
     def read_coil(self, addr: int) -> bool:
@@ -96,14 +102,14 @@ class FakeSis:
             # Compromised: suppress trip, freeze operator view.
             self._coil[int(R.SisCoil.TRIP_CMD)] = False
             self._coil[int(R.SisCoil.TRIP_STATUS)] = False
-            # LEVEL_HMI deliberately not refreshed -> holds its last value.
+            # PV_HMI deliberately not refreshed -> holds its last value.
         else:
-            if self._holding[int(R.SisHolding.LEVEL_PV)] >= SIS_TRIP_HH:
+            if self._holding[int(R.SisHolding.PV)] >= self.trip_hh_reg:
                 self._tripped = True
             self._coil[int(R.SisCoil.TRIP_CMD)] = self._tripped
             self._coil[int(R.SisCoil.TRIP_STATUS)] = self._tripped
-            self._holding[int(R.SisHolding.LEVEL_HMI)] = \
-                self._holding[int(R.SisHolding.LEVEL_PV)]
+            self._holding[int(R.SisHolding.PV_HMI)] = \
+                self._holding[int(R.SisHolding.PV)]
 
     def close(self) -> None:
         pass
