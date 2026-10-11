@@ -27,7 +27,9 @@ PROGRAM prog0
     trip_cmd    AT %QX0.0 : BOOL;  (* out: force feed shut *)
     trip_status AT %QX0.1 : BOOL;  (* out: 1 = tripped, 0 = armed-normal *)
     override    AT %QX0.2 : BOOL;  (* in : 1 = force/bypass (read only) *)
-    tripped     : BOOL;            (* latched trip state *)
+  END_VAR
+  VAR
+    tripped     : BOOL;            (* latched trip state (internal) *)
   END_VAR
   VAR CONSTANT
     TRIP_HH : INT := 9000;         (* high-high level trip = 9.0 m, in mm *)

@@ -7,3 +7,4 @@
 # pymodbus is only needed to talk to the REAL OpenPLC instances: the live
 # bridge, the HMI, the attack script, and tests/test_bridge_live.py.
 pymodbus>=3.6,<4
+pyserial>=3.5          # pulled in by pymodbus's transport layer even for Modbus TCP

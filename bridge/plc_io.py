@@ -121,12 +121,19 @@ class ModbusPlc:
     """
 
     def __init__(self, host: str, port: int, unit: int = 1, timeout: float = 1.0) -> None:
+        import inspect
         from pymodbus.client import ModbusTcpClient  # lazy import
 
         self._unit = unit
         self._client = ModbusTcpClient(host, port=port, timeout=timeout)
         if not self._client.connect():
             raise ConnectionError(f"could not connect to OpenPLC at {host}:{port}")
+        # pymodbus renamed the unit-id kwarg from `slave` to `device_id` mid-3.x.
+        params = inspect.signature(self._client.read_coils).parameters
+        self._id_kw = "device_id" if "device_id" in params else "slave"
+
+    def _id(self) -> dict:
+        return {self._id_kw: self._unit}
 
     @classmethod
     def for_instance(cls, instance: R.Instance, **kw) -> "ModbusPlc":
@@ -134,24 +141,24 @@ class ModbusPlc:
         return cls(host, port, **kw)
 
     def read_coil(self, addr: int) -> bool:
-        rr = self._client.read_coils(int(addr), count=1, slave=self._unit)
+        rr = self._client.read_coils(int(addr), count=1, **self._id())
         if rr.isError():
             raise IOError(f"read_coil {addr} failed: {rr}")
         return bool(rr.bits[0])
 
     def write_coil(self, addr: int, value: bool) -> None:
-        rr = self._client.write_coil(int(addr), bool(value), slave=self._unit)
+        rr = self._client.write_coil(int(addr), bool(value), **self._id())
         if rr.isError():
             raise IOError(f"write_coil {addr} failed: {rr}")
 
     def read_holding(self, addr: int) -> int:
-        rr = self._client.read_holding_registers(int(addr), count=1, slave=self._unit)
+        rr = self._client.read_holding_registers(int(addr), count=1, **self._id())
         if rr.isError():
             raise IOError(f"read_holding {addr} failed: {rr}")
         return int(rr.registers[0])
 
     def write_holding(self, addr: int, value: int) -> None:
-        rr = self._client.write_register(int(addr), int(value), slave=self._unit)
+        rr = self._client.write_register(int(addr), int(value), **self._id())
         if rr.isError():
             raise IOError(f"write_holding {addr} failed: {rr}")
 
