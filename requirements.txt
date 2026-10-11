@@ -1,0 +1,9 @@
+# PetroTwin Phase-0 runtime dependencies.
+#
+# The physics model, the register map, the fake-PLC integrated-loop tests, and
+# the end-to-end fake demo (python3 -m bridge.run_fake_demo) all run on the
+# Python standard library alone.
+#
+# pymodbus is only needed to talk to the REAL OpenPLC instances: the live
+# bridge, the HMI, the attack script, and tests/test_bridge_live.py.
+pymodbus>=3.6,<4
