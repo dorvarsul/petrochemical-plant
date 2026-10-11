@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PetroTwin — T-101</title>
+<style>
+  :root { --bg:#0d1016; --panel:#141a22; --line:#232c38; --txt:#e7edf5;
+          --dim:#8aa0b5; --green:#27d07a; --red:#ff4d4d; --amber:#ffb020;
+          --blue:#3a7bff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--txt);
+              font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 18px;
+           border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.3px; }
+  header .meta { color:var(--dim); font-size:13px; }
+  header .spacer { flex:1; }
+  button { font:inherit; font-weight:600; border:1px solid var(--line);
+           background:#1b2430; color:var(--txt); padding:8px 14px; border-radius:8px;
+           cursor:pointer; }
+  button:hover { border-color:#3a4759; }
+  button.attack { background:#3a1414; border-color:#5e1d1d; color:#ff8b8b; }
+  button.attack:hover { background:#4d1818; }
+  .legend { padding:6px 18px; font-size:12px; color:var(--dim);
+            border-bottom:1px solid var(--line); background:#10151c; }
+  .legend b { color:var(--txt); }
+  main { flex:1; display:flex; min-height:0; }
+  .panel { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .panel + .panel { border-left:1px solid var(--line); }
+  .panel h2 { margin:0; padding:10px 16px; font-size:13px; letter-spacing:1px;
+              text-transform:uppercase; color:var(--dim); border-bottom:1px solid var(--line); }
+  .panel .src { font-size:11px; color:var(--dim); padding:2px 16px 0; }
+
+  /* ---- HMI panel ---- */
+  .hmi { background:#0a0e13; flex:1; display:flex; gap:28px; padding:24px; align-items:center; }
+  .gauge { position:relative; width:120px; height:320px; border:2px solid #2a3340;
+           border-radius:10px; background:#0f141b; overflow:hidden; }
+  .gauge .fill { position:absolute; left:0; right:0; bottom:0; background:var(--green);
+                 transition:height .15s linear, background .3s; }
+  .gauge .mark { position:absolute; left:0; right:0; border-top:1px dashed #51607340;
+                 font-size:10px; color:#6b7c90; padding-left:4px; }
+  .gauge .mark.trip { border-top:1px dashed var(--red); color:#c77; }
+  .readout { display:flex; flex-direction:column; gap:14px; }
+  .readout .big { font-size:52px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .readout .big span { font-size:20px; color:var(--dim); font-weight:500; }
+  .readout .label { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .lamp { display:inline-flex; align-items:center; gap:10px; font-weight:700;
+          padding:10px 16px; border-radius:8px; font-size:15px; }
+  .lamp .dot { width:14px; height:14px; border-radius:50%; }
+  .lamp.ok { background:#0f2419; color:var(--green); }
+  .lamp.ok .dot { background:var(--green); box-shadow:0 0 10px var(--green); }
+  .lamp.trip { background:#2a1111; color:var(--red); }
+  .lamp.trip .dot { background:var(--red); box-shadow:0 0 10px var(--red); }
+
+  /* ---- 3D panel ---- */
+  .view { position:relative; flex:1; background:#070a0e; }
+  #c3d { width:100%; height:100%; display:block; }
+  .overlay { position:absolute; left:16px; top:14px; font-variant-numeric:tabular-nums; }
+  .overlay .big { font-size:40px; font-weight:700; }
+  .overlay .label { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .rupture { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+             background:rgba(120,10,10,.28); color:#ffd3d3; font-size:30px; font-weight:800;
+             letter-spacing:2px; text-shadow:0 2px 12px #000; }
+  .rupture.on { display:flex; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>PetroTwin · Tank T-101</h1>
+    <span class="meta">overfill scenario · <span id="clock">t = 0.0 s</span></span>
+    <span class="spacer"></span>
+    <span id="attackChip" class="meta">attack: inactive</span>
+    <button class="attack" id="btnAttack">Inject attack</button>
+    <button id="btnReset">Reset</button>
+  </header>
+  <div class="legend">
+    <b>Left — Operator HMI:</b> polled from the Safety PLC over Modbus (spoofable).
+    &nbsp;·&nbsp; <b>Right — Ground truth:</b> read from the physics model directly (unspoofable).
+    When the SIS is overridden, the HMI stays nominal while the true tank runs to overflow.
+  </div>
+  <main>
+    <section class="panel">
+      <h2>Operator HMI / SCADA</h2>
+      <div class="src">source: Safety PLC (SIS) · Modbus holding reg SIS_LEVEL_HMI + coil SIS_TRIP_STATUS</div>
+      <div class="hmi">
+        <div class="gauge">
+          <div class="fill" id="hmiFill" style="height:50%"></div>
+          <div class="mark trip" style="bottom:90%">HH trip 9.0 m</div>
+          <div class="mark" style="bottom:50%">SP 5.0 m</div>
+        </div>
+        <div class="readout">
+          <div>
+            <div class="label">Tank level</div>
+            <div class="big"><span id="hmiLevel">5.000</span> <span>m</span></div>
+          </div>
+          <div class="lamp ok" id="hmiLamp"><span class="dot"></span><span id="hmiLampTxt">SIS ARMED</span></div>
+          <div class="label" id="hmiNote">status: normal operation</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Ground truth · 3D</h2>
+      <div class="src">source: physics model (direct) — not via any PLC or network</div>
+      <div class="view">
+        <canvas id="c3d"></canvas>
+        <div class="overlay">
+          <div class="label">True tank level</div>
+          <div class="big"><span id="trueLevel">5.000</span> m</div>
+        </div>
+        <div class="rupture" id="rupture">● TANK OVERFLOW / LOSS OF CONTAINMENT ●</div>
+      </div>
+    </section>
+  </main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var H3D = 3.0;              // 3D tank height in scene units (= 10 m)
+
+  // ---- Three.js scene ----
+  var canvas = document.getElementById("c3d");
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x070a0e);
+  var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+  camera.position.set(4.2, 2.6, 5.2);
+  camera.lookAt(0, 0, 0);
+
+  scene.add(new THREE.AmbientLight(0x6677aa, 0.8));
+  var dir = new THREE.DirectionalLight(0xffffff, 0.9);
+  dir.position.set(5, 8, 6); scene.add(dir);
+
+  var group = new THREE.Group(); scene.add(group);
+
+  // ground
+  var ground = new THREE.Mesh(
+    new THREE.CircleGeometry(4, 48),
+    new THREE.MeshStandardMaterial({ color: 0x10151c, roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.y = -H3D / 2 - 0.01; group.add(ground);
+
+  // tank shell (semi-transparent)
+  var shell = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.25, 1.25, H3D, 40, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0x9fb4cc, transparent: true, opacity: 0.16,
+                                     side: THREE.DoubleSide, roughness: 0.4, metalness: 0.2 }));
+  group.add(shell);
+  // tank rings
+  [-H3D / 2, H3D / 2].forEach(function (y) {
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.03, 10, 40),
+      new THREE.MeshStandardMaterial({ color: 0x4a5a70 }));
+    ring.rotation.x = Math.PI / 2; ring.position.y = y; group.add(ring);
+  });
+
+  // liquid
+  var liquidMat = new THREE.MeshStandardMaterial({ color: 0x3a7bff, roughness: 0.25,
+                                                   metalness: 0.1 });
+  var liquid = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.18, H3D, 40), liquidMat);
+  group.add(liquid);
+
+  function setLevel(frac, overflowing, overTrip) {
+    frac = Math.max(0, Math.min(1, frac));
+    liquid.scale.y = Math.max(0.0001, frac);
+    liquid.position.y = -H3D / 2 + (frac * H3D) / 2;
+    var color = overflowing ? 0xff3b3b : (overTrip ? 0xffb020 : 0x3a7bff);
+    liquidMat.color.setHex(color);
+  }
+
+  function resize() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", resize);
+
+  function animate() {
+    requestAnimationFrame(animate);
+    group.rotation.y += 0.0035;
+    resize();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // ---- state polling ----
+  var elClock = document.getElementById("clock");
+  var elChip = document.getElementById("attackChip");
+  var elHmiFill = document.getElementById("hmiFill");
+  var elHmiLevel = document.getElementById("hmiLevel");
+  var elHmiLamp = document.getElementById("hmiLamp");
+  var elHmiLampTxt = document.getElementById("hmiLampTxt");
+  var elHmiNote = document.getElementById("hmiNote");
+  var elTrueLevel = document.getElementById("trueLevel");
+  var elRupture = document.getElementById("rupture");
+
+  function render(st) {
+    elClock.textContent = "t = " + st.time.toFixed(1) + " s";
+    elChip.textContent = "attack: " + (st.attacked ? "ACTIVE (SIS overridden)" : "inactive");
+    elChip.style.color = st.attacked ? "#ff8b8b" : "#8aa0b5";
+
+    // HMI (spoofable)
+    elHmiLevel.textContent = st.hmi.level.toFixed(3);
+    elHmiFill.style.height = (st.hmi.fraction * 100).toFixed(1) + "%";
+    var tripped = st.hmi.trip_status;
+    elHmiFill.style.background = tripped ? "var(--red)" : "var(--green)";
+    elHmiLamp.className = "lamp " + (tripped ? "trip" : "ok");
+    elHmiLampTxt.textContent = tripped ? "SIS TRIPPED" : "SIS ARMED";
+    elHmiNote.textContent = tripped ? "status: shutdown" : "status: normal operation";
+
+    // ground truth (unspoofable)
+    elTrueLevel.textContent = st.truth.level.toFixed(3);
+    setLevel(st.truth.fraction, st.truth.overflowing, st.truth.level >= 9.0);
+    elRupture.className = "rupture" + (st.truth.overflowing ? " on" : "");
+  }
+
+  function poll() {
+    fetch("/api/state").then(function (r) { return r.json(); })
+      .then(render).catch(function () {});
+  }
+  setInterval(poll, 200); poll();
+
+  document.getElementById("btnAttack").onclick = function () {
+    fetch("/api/attack", { method: "POST" });
+  };
+  document.getElementById("btnReset").onclick = function () {
+    fetch("/api/reset", { method: "POST" });
+  };
+})();
+</script>
+</body>
+</html>
