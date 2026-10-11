@@ -129,64 +129,82 @@ conventions:
 
 - Each OpenPLC instance is a **Modbus slave**; the bridge is the **Modbus master**.
   A master can read/write **coils** (bool) and **holding registers** (16-bit) but
-  cannot write a slave's discrete-input / input-register tables. So Phase 0 carries
-  everything in **coils + holding registers**: the bridge *writes* sensor values
-  into holding registers the PLC program treats as read-only inputs, and *reads*
-  back the coils/registers the program drives as outputs. (A more faithful
-  input-register / discrete-input mapping is a Phase-2 item.)
+  cannot write a slave's discrete-input / input-register tables.
 - The two PLCs are **separate Modbus slaves** (two OpenPLC instances on different
-  host ports), each with its **own address space starting at 0**. The bridge
-  addresses a register by *(instance, table, address)*, not one shared namespace.
-  Coils and holding registers are separate tables, so coil `0` and holding
-  register `0` on the same instance are distinct.
-- OpenPLC maps IEC 61131-3 located variables to Modbus as `%QWk` → holding
-  register `k` and `%QXn.m` → coil `n*8+m`. A Modbus master may **write** coils and
-  holding registers and **read** every table, so sensor values are injected into
-  `%QW` holding registers that the program treats as inputs. (`%IW`/`%IX` are not
-  master-writable; a faithful input mapping is a Phase-2 item.)
-- Analog values are scaled to integers: **level in millimetres**
-  (`mm = round(level_m × 1000)`, range `0–10000`) and **valve position in per-mille**
+  host ports). The bridge addresses a register by *(instance, table, address)*,
+  not one shared namespace.
+- **OpenPLC located-variable → Modbus mapping, and the direction trap.** OpenPLC
+  maps `%QXn.m` → coil `n*8+m`, `%QWk` → holding register `k`, and `%MWk` → holding
+  register `1024 + k`. The direction matters, and a `%QW` is **not** a usable
+  sensor input: a `%QW` output word is rewritten from the PLC program's image every
+  scan, so a Modbus master write to it is clobbered and **never reaches the
+  program** (verified against the running v3 runtime — `VARIABLES.csv` classifies a
+  `%QW` located var as `OUT`). So:
+    - **Sensor (master → program):** a `%MW` **memory word** (`SIS_PV`/`BPCS_PV` at
+      holding `1024`), which the master and the program share in place with no scan
+      clobber. Coils are shared too, which is why the override coil reaches the
+      program.
+    - **Actuator / HMI mirror / trip (program → master):** `%QW` holding registers
+      and `%QX` coils, read back by the bridge/HMI.
+
+  (An earlier revision put the PV sensor on `%QW0`; that silently failed — the SIS
+  never saw the true PV. The `%MW` mapping is the fix. A faithful input-register /
+  discrete-input mapping is still a later-phase item.)
+- Analog values are scaled to integers **per scenario** (`reg = round(pv ×
+  reg_scale)`), the single source being `scenario.reg_scale` in
+  `common/scenarios.py`: level in mm (`×1000`), pressure in cbar (`×100`),
+  temperature in ddeg C (`×10`). Valve position is a scenario-independent per-mille
   (`0–1000`). Scale/units documented per row.
 
-### Phase-0 scenario semantics (tank overfill)
+### Scenario semantics (all three share one shape)
 
-The map encodes this control/attack story — a **Phase-0 modeling choice**, documented,
-not a claim of plant fidelity:
+The map encodes one control/attack story, parameterized per scenario — a
+**modeling choice**, documented, not a claim of plant fidelity. The three
+scenarios differ only in the PV, its scaling, the trip threshold, and the
+physical meaning of the protective action:
 
-- **Normal:** a fill is in progress. The BPCS holds the feed valve open; the SIS
-  high-level trip is the automatic overflow protection, armed and watching the true
-  level. The operator HMI shows the level and an "SIS armed" status **sourced from
-  the Safety PLC** — so a single SIS compromise is enough to both defeat protection
-  and blind the operator. (Concentrating the HMI's safety display on the SIS is a
-  Phase-0 simplification; distributed display sourcing is a Phase-2 topic.)
-- **Protective action:** at level ≥ high-high (`trip_hh`, 9 m), the healthy SIS
-  asserts `SIS_TRIP_CMD`; the bridge applies it as feed-shut and the tank holds safe.
-- **Attack (Safety PLC only):** the attacker sets `SIS_OVERRIDE`, after which the SIS
-  logic holds `SIS_TRIP_CMD` and `SIS_TRIP_STATUS` deasserted (no trip, indicator
-  "armed") and **stops refreshing** `SIS_LEVEL_HMI`, so the operator's level freezes at
-  its last nominal value while the true level keeps rising. The physics runs to
-  overflow while the HMI stays green. This abuses a force/override path reachable over
-  Modbus — the attack **pattern**, not Triton's program-injection **mechanism**
-  (Phase 3). See `OVERVIEW.md` scope limit.
-- **Effective feed applied to the physics each bridge cycle:**
-  `feed = 0 if SIS_TRIP_CMD else BPCS_FEED_CMD`, where a healthy SIS computes
-  `SIS_TRIP_CMD = latch(level ≥ trip_hh)` unless `SIS_OVERRIDE` is set.
-  `trip_hh` is a program constant in Phase 0 (a configurable setpoint register is a
-  later-phase option, and a second attack variant).
+| Scenario | PV (`reg_scale`) | BPCS actuator | SIS trip (`trip_hh`) | Protective action | Failure |
+|----------|------------------|---------------|----------------------|-------------------|---------|
+| tank    | level, m (`×1000`)    | feed valve       | 9.0 m (`9000`)   | force feed shut  | overflow at 10 m |
+| vessel  | pressure, bar (`×100`)| compressor feed  | 16.0 bar (`1600`)| open relief valve| rupture at 20 bar |
+| reactor | temperature, °C (`×10`)| reactant feed   | 110 °C (`1100`)  | force max cooling| runaway at 300 °C |
 
-### Register map — Phase 0 (tank overfill)
+- **Normal:** the process is running. The BPCS holds the feed actuator open; the
+  SIS high-high trip is armed, watching the true PV. The operator HMI shows the PV
+  and an "SIS armed" status **sourced from the Safety PLC** — so a single SIS
+  compromise both defeats protection and blinds the operator. (Concentrating the
+  HMI's safety display on the SIS is a simplification; distributed display sourcing
+  is a later-phase topic.)
+- **Protective action:** at PV ≥ `trip_hh`, the healthy SIS latches `SIS_TRIP_CMD`;
+  the physics model applies it in its scenario-specific way and holds the process
+  safe.
+- **Attack (Safety PLC only):** the attacker sets `SIS_OVERRIDE`, after which the
+  SIS logic holds `SIS_TRIP_CMD` and `SIS_TRIP_STATUS` deasserted (no trip,
+  indicator "armed") and **stops refreshing** `SIS_PV_HMI`, so the operator's PV
+  freezes at its last nominal value while the true PV keeps rising. The physics
+  runs to failure while the HMI stays green. This abuses a force/override path
+  reachable over Modbus — the attack **pattern**, not Triton's program-injection
+  **mechanism** (Phase 3). See `OVERVIEW.md` scope limit.
+- **How the trip reaches the physics:** the bridge reads `SIS_TRIP_CMD` and
+  `BPCS_FEED_CMD` and calls `model.step(dt, feed_cmd, trip)`; each model applies the
+  trip itself (feed shut / relief open / max cooling). `trip_hh` is a program
+  constant engineered per scenario — its single source is `scenario.trip_reg`, which
+  `plc/load_scenario.py` substitutes into the SIS program at load time (a writable
+  setpoint register is a later-phase option and a second attack variant).
 
-Two slaves, each addressed from 0. Addresses below are the Modbus addresses the
-bridge uses; `ST var` is the OpenPLC located variable the program declares.
+### Register map (all scenarios)
+
+Two slaves. Addresses below are the Modbus addresses the bridge uses; `ST var` is
+the OpenPLC located variable the program declares. The map is identical for every
+scenario — only the PV scaling (see the table above) changes. **The PV sensor is a
+`%MW` memory word (holding `1024`), not `%QW`** — see the direction trap above.
 
 **Control PLC — BPCS** · Modbus slave, default `localhost:5020`
 
-Holding registers (16-bit, master read/write):
-
-| Addr | ST var | Name            | Direction                  | Units / scale        | Meaning                                         |
-|------|--------|-----------------|----------------------------|----------------------|-------------------------------------------------|
-| `0`  | `%QW0` | `BPCS_LEVEL_PV` | physics → PLC (master wr.) | mm (`0–10000`)       | true level measured by BPCS; program reads it   |
-| `1`  | `%QW1` | `BPCS_FEED_CMD` | PLC → physics (master rd.) | per-mille (`0–1000`) | fill-valve position; Phase-0 program holds `1000` (open) |
+| Table | Addr | ST var | Name            | Direction                  | Units / scale        | Meaning                                         |
+|-------|------|--------|-----------------|----------------------------|----------------------|-------------------------------------------------|
+| hold  | `1024`| `%MW0`| `BPCS_PV`       | physics → PLC (master wr.) | scaled PV            | true PV measured by BPCS; program reads it      |
+| hold  | `1`  | `%QW1` | `BPCS_FEED_CMD` | PLC → physics (master rd.) | per-mille (`0–1000`) | feed-actuator position; program holds `1000` (open) |
 
 **Safety PLC — SIS** · Modbus slave, default `localhost:5021`
 
@@ -194,16 +212,16 @@ Coils (1-bit, master read/write):
 
 | Addr | ST var   | Name              | Direction                  | Meaning                                                                        |
 |------|----------|-------------------|----------------------------|--------------------------------------------------------------------------------|
-| `0`  | `%QX0.0` | `SIS_TRIP_CMD`    | PLC → physics (master rd.) | 1 = trip (force feed shut). Healthy SIS latches at level ≥ `trip_hh`. **Attack holds 0.** |
+| `0`  | `%QX0.0` | `SIS_TRIP_CMD`    | PLC → physics (master rd.) | 1 = trip (force protective action). Healthy SIS latches at PV ≥ `trip_hh`. **Attack holds 0.** |
 | `1`  | `%QX0.1` | `SIS_TRIP_STATUS` | PLC → HMI (master rd.)      | 1 = tripped, 0 = armed-normal (operator indicator). **Attack holds 0.**        |
 | `2`  | `%QX0.2` | `SIS_OVERRIDE`    | attack → PLC (master wr.)   | 0 normal; 1 = force/bypass. Program only reads it. **Attack sets 1.**          |
 
 Holding registers (16-bit, master read/write):
 
-| Addr | ST var | Name            | Direction                  | Units / scale  | Meaning                                                                      |
-|------|--------|-----------------|----------------------------|----------------|------------------------------------------------------------------------------|
-| `0`  | `%QW0` | `SIS_LEVEL_PV`  | physics → PLC (master wr.) | mm (`0–10000`) | true level measured by SIS; program reads it (independent sensor)            |
-| `1`  | `%QW1` | `SIS_LEVEL_HMI` | PLC → HMI (master rd.)     | mm (`0–10000`) | displayed level = PV normally; under `SIS_OVERRIDE` the program stops updating it, so it **freezes** at its last nominal value |
+| Addr   | ST var | Name          | Direction                  | Units / scale | Meaning                                                                      |
+|--------|--------|---------------|----------------------------|---------------|------------------------------------------------------------------------------|
+| `1024` | `%MW0` | `SIS_PV`      | physics → PLC (master wr.) | scaled PV     | true PV measured by SIS; program reads it (independent sensor)               |
+| `1`    | `%QW1` | `SIS_PV_HMI`  | PLC → HMI (master rd.)     | scaled PV     | displayed PV = PV normally; under `SIS_OVERRIDE` the program stops updating it, so it **freezes** at its last nominal value |
 
 > This map is authoritative and lives in code as `common/registers.py` — the bridge,
 > both PLC programs, the HMI, and the attack script import names/addresses from there,

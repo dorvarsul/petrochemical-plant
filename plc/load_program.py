@@ -61,6 +61,20 @@ def _get(op, url):
 
 
 def load(base_url: str, st_path: str, prog_name: str) -> None:
+    """Load an ST program from a file path."""
+    with open(st_path, "r") as f:
+        st_content = f.read()
+    load_text(base_url, st_content, prog_name, source=st_path)
+
+
+def load_text(base_url: str, st_content: str, prog_name: str,
+              source: str = "<generated>") -> None:
+    """Load an ST program from in-memory text (login -> upload -> compile -> start).
+
+    Used by plc/load_scenario.py, which generates the SIS program from the
+    canonical template and the scenario's trip threshold so the loaded program
+    always matches common/scenarios.py (no hand-copied constants to drift).
+    """
     base_url = base_url.rstrip("/")
     op = _opener()
 
@@ -70,10 +84,7 @@ def load(base_url: str, st_path: str, prog_name: str) -> None:
     if "Invalid username or password" in body or "name='password'" in body:
         raise SystemExit("login failed (check credentials)")
 
-    with open(st_path, "r") as f:
-        st_content = f.read()
-
-    print(f"[{base_url}] upload {st_path}")
+    print(f"[{base_url}] upload {source}")
     body = _post(op, f"{base_url}/upload-program",
                  files={"file": ("program.st", st_content)})
     m = re.search(r"value='([^']+\.st)'\s+id='prog_file'", body)

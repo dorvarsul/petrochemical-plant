@@ -1,24 +1,31 @@
 (*
- * PetroTwin - Control PLC (BPCS) - Phase 0, tank-overfill scenario.
+ * PetroTwin - Control PLC (BPCS) - shared across all scenarios.
  *
- * Basic Process Control System. In Phase 0 its job is simply to run the fill:
- * hold the feed valve fully open. It is NOT the safety function and performs no
- * trip - stopping the fill at high level is the Safety PLC's (SIS) job, applied
- * to the physics by the Modbus bridge as:
- *     effective_feed = 0 if SIS_TRIP_CMD else BPCS_FEED_CMD
+ * Basic Process Control System. Its job is simply to run the process: hold the
+ * feed actuator fully open (fill valve / compressor feed / reactant feed,
+ * depending on the scenario). It is NOT the safety function and performs no
+ * trip - the protective action is the Safety PLC's (SIS) job, applied to the
+ * physics by the Modbus bridge.
+ *
+ * The same program serves every scenario because the BPCS behaviour is
+ * identical (drive the process); only the SIS trip threshold differs per
+ * scenario (see plc/sis/sis.st + plc/load_scenario.py).
  *
  * Modbus mapping (see common/registers.py / ARCHITECTURE.md):
- *   %QW0  BPCS_LEVEL_PV  - true level (mm); bridge WRITES, we only read
- *   %QW1  BPCS_FEED_CMD  - fill-valve position (per-mille); we write, bridge reads
+ *   %MW0  BPCS_PV        - true PV sensor (scaled); bridge WRITES, we only read.
+ *                          A %MW MEMORY word (holding 1024), NOT %QW: a %QW output
+ *                          is rewritten from our image each scan, so a master write
+ *                          to it would never reach us.
+ *   %QW1  BPCS_FEED_CMD  - feed actuator position (per-mille); we write, bridge reads
  *)
 
 PROGRAM prog0
   VAR
-    level_pv AT %QW0 : INT;   (* sensor in : true level, mm (read only) *)
-    feed_cmd AT %QW1 : INT;   (* command out: fill valve, per-mille (0..1000) *)
+    pv       AT %MW0 : INT;   (* sensor in : true PV, scaled (read only) *)
+    feed_cmd AT %QW1 : INT;   (* command out: feed actuator, per-mille (0..1000) *)
   END_VAR
 
-  (* Phase 0: run the fill - valve fully open. *)
+  (* Run the process - feed actuator fully open. *)
   feed_cmd := 1000;
 
 END_PROGRAM

@@ -44,22 +44,42 @@ class TestMapInvariants(unittest.TestCase):
             self.assertEqual(info.instance, inst)
             self.assertEqual(info.table, table)
 
-    def test_each_instance_addresses_from_zero(self):
-        # Per-instance address spaces both start at 0 (independent slaves).
-        self.assertEqual(min(R.BpcsHolding), 0)
+    def test_coils_addressed_from_zero(self):
+        # Coils are a per-instance table addressed from 0 (independent slaves).
         self.assertEqual(min(R.SisCoil), 0)
-        self.assertEqual(min(R.SisHolding), 0)
+
+    def test_holding_in_qw_or_mw_bands(self):
+        # Holding addresses are either %QW (< 1024) or %MW (>= 1024); never negative.
+        for enum_cls in (R.BpcsHolding, R.SisHolding):
+            for m in enum_cls:
+                self.assertGreaterEqual(int(m), 0)
+                self.assertLessEqual(int(m), R.REG_U16_MAX)
 
     def test_addresses_unique_within_table(self):
         for enum_cls in (R.BpcsHolding, R.SisCoil, R.SisHolding):
             addrs = [int(m) for m in enum_cls]
             self.assertEqual(len(addrs), len(set(addrs)))
 
-    def test_qw_mapping_matches_address(self):
-        # OpenPLC %QWk -> holding register k, so the ST var index must equal the addr.
+    def test_holding_mapping_matches_address(self):
+        # OpenPLC %QWk -> holding register k; %MWk -> holding register 1024+k.
         for (_inst, table, addr), info in R.REGISTERS.items():
-            if table == "holding":
-                self.assertEqual(info.st_var, f"%QW{int(addr)}")
+            if table != "holding":
+                continue
+            if info.st_var.startswith("%QW"):
+                self.assertEqual(int(addr), int(info.st_var[3:]))
+            elif info.st_var.startswith("%MW"):
+                self.assertEqual(int(addr), R.MW_HOLDING_BASE + int(info.st_var[3:]))
+            else:
+                self.fail(f"unexpected holding st_var {info.st_var!r}")
+
+    def test_sensor_is_memory_word_not_output(self):
+        # The master->program sensor must be a %MW (shared memory), never a %QW
+        # output (which the program image clobbers each scan).
+        for inst, pv in ((R.Instance.BPCS, R.BpcsHolding.PV),
+                         (R.Instance.SIS, R.SisHolding.PV)):
+            info = R.REGISTERS[(inst, "holding", pv)]
+            self.assertTrue(info.st_var.startswith("%MW"), info.st_var)
+            self.assertGreaterEqual(int(pv), R.MW_HOLDING_BASE)
 
     def test_qx_mapping_matches_address(self):
         # OpenPLC %QXn.m -> coil n*8+m; coils live in byte 0.

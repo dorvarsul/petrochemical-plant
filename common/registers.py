@@ -15,11 +15,22 @@ rather than a fixed level conversion here. The valve/actuator command is a
 scenario-independent per-mille fraction and is scaled here.
 
 Topology: two OpenPLC instances, each a separate Modbus slave with its OWN
-address space starting at 0. A register is addressed by (instance, table,
-address). OpenPLC maps located variables to Modbus as `%QWk` -> holding
-register k and `%QXn.m` -> coil n*8+m; a master may write coils and holding
-registers and read every table, so sensors are injected into `%QW` holding
-registers the program treats as inputs.
+address space. A register is addressed by (instance, table, address).
+
+OpenPLC located-variable → Modbus mapping (verified against the running v3
+runtime; see ARCHITECTURE.md "OpenPLC glue" note):
+
+  * `%QXn.m` → coil `n*8+m`                 (program output / master R-W)
+  * `%QWk`   → holding register `k`         (program OUTPUT image)
+  * `%MWk`   → holding register `1024 + k`  (shared MEMORY word)
+
+The direction matters. A `%QW` output is rewritten from the PLC program's image
+every scan, so a Modbus master write to it is clobbered and never reaches the
+program — it is only good for program→master values (actuator command, HMI
+mirror). The SENSOR injection (master→program) therefore uses a `%MW` MEMORY
+word (`MW_HOLDING_BASE + k`), which the master and the program share in place
+with no scan clobber. Coils are shared too, so the override coil works
+master→program. This replaces the earlier (incorrect) `%QW0`-sensor mapping.
 """
 
 from __future__ import annotations
@@ -31,6 +42,9 @@ from enum import Enum, IntEnum
 VALVE_PER_MILLE = 1000  # valve register = round(fraction * 1000), unit = per-mille
 VALVE_REG_MAX = 1000    # fully open
 REG_U16_MAX = 65535     # Modbus 16-bit register ceiling
+
+# OpenPLC maps %MWk to holding register MW_HOLDING_BASE + k (shared memory word).
+MW_HOLDING_BASE = 1024
 
 
 # --- Instances and their default Modbus endpoints --------------------------
@@ -49,8 +63,8 @@ ENDPOINTS = {
 # --- BPCS (Control PLC) registers ------------------------------------------
 class BpcsHolding(IntEnum):
     """BPCS holding registers (master read/write)."""
-    PV = 0        # %QW0  physics -> PLC (scaled PV); program reads
-    FEED_CMD = 1  # %QW1  PLC -> physics (per-mille); program writes
+    PV = MW_HOLDING_BASE  # %MW0 (holding 1024) physics -> PLC sensor; program reads
+    FEED_CMD = 1          # %QW1 PLC -> physics (per-mille); program writes
 
 
 # --- SIS (Safety PLC) registers --------------------------------------------
@@ -63,8 +77,8 @@ class SisCoil(IntEnum):
 
 class SisHolding(IntEnum):
     """SIS holding registers (master read/write)."""
-    PV = 0      # %QW0  physics -> PLC (scaled PV); program reads
-    PV_HMI = 1  # %QW1  PLC -> HMI (scaled PV); frozen under OVERRIDE
+    PV = MW_HOLDING_BASE  # %MW0 (holding 1024) physics -> PLC sensor; program reads
+    PV_HMI = 1            # %QW1 PLC -> HMI (scaled PV); frozen under OVERRIDE
 
 
 @dataclass(frozen=True)
@@ -79,7 +93,7 @@ class RegInfo:
 # Flat metadata view keyed by (instance, table, address).
 REGISTERS = {
     (Instance.BPCS, "holding", BpcsHolding.PV):
-        RegInfo(Instance.BPCS, "holding", "%QW0", "physics->PLC", "pv (scaled)"),
+        RegInfo(Instance.BPCS, "holding", "%MW0", "physics->PLC", "pv (scaled)"),
     (Instance.BPCS, "holding", BpcsHolding.FEED_CMD):
         RegInfo(Instance.BPCS, "holding", "%QW1", "PLC->physics", "per-mille"),
     (Instance.SIS, "coil", SisCoil.TRIP_CMD):
@@ -89,7 +103,7 @@ REGISTERS = {
     (Instance.SIS, "coil", SisCoil.OVERRIDE):
         RegInfo(Instance.SIS, "coil", "%QX0.2", "attack->PLC", "bool"),
     (Instance.SIS, "holding", SisHolding.PV):
-        RegInfo(Instance.SIS, "holding", "%QW0", "physics->PLC", "pv (scaled)"),
+        RegInfo(Instance.SIS, "holding", "%MW0", "physics->PLC", "pv (scaled)"),
     (Instance.SIS, "holding", SisHolding.PV_HMI):
         RegInfo(Instance.SIS, "holding", "%QW1", "PLC->HMI", "pv (scaled)"),
 }
