@@ -21,7 +21,7 @@ class TestConservation(unittest.TestCase):
         tank = TankModel(q_out=0.0, level0=4.0)
         v0 = tank.volume
         for _ in range(1000):
-            tank.step(dt=0.5, feed_valve=0.0)
+            tank.step(dt=0.5, feed_cmd=0.0)
         self.assertAlmostEqual(tank.volume, v0, places=9)
         self.assertAlmostEqual(tank.level, 4.0, places=9)
         self.assertEqual(tank.spilled_volume, 0.0)
@@ -34,7 +34,7 @@ class TestSteadyState(unittest.TestCase):
         tank = TankModel(level0=5.0)  # q_in_max=0.05, q_out=0.02
         balanced_valve = tank.q_out / tank.q_in_max  # 0.4 -> Q_in == Q_out
         for _ in range(2000):
-            tank.step(dt=1.0, feed_valve=balanced_valve)
+            tank.step(dt=1.0, feed_cmd=balanced_valve)
         self.assertAlmostEqual(tank.level, 5.0, places=6)
         self.assertFalse(tank.overflowing)
 
@@ -53,7 +53,7 @@ class TestOverfillFailure(unittest.TestCase):
         levels = [tank.level]
         crossed_trip = False
         for _ in range(400):
-            tank.step(dt=1.0, feed_valve=1.0)
+            tank.step(dt=1.0, feed_cmd=1.0)
             levels.append(tank.level)
             if tank.level >= tank.level_trip_hh:
                 crossed_trip = True
@@ -77,7 +77,7 @@ class TestOverfillFailure(unittest.TestCase):
         dt = 0.1
         steps = 0
         while not tank.overflowing and steps < 100000:
-            tank.step(dt=dt, feed_valve=1.0)
+            tank.step(dt=dt, feed_cmd=1.0)
             steps += 1
         self.assertFalse(tank.overflowing and steps >= 100000)
         self.assertAlmostEqual(tank.time, expected, delta=dt)
@@ -85,7 +85,7 @@ class TestOverfillFailure(unittest.TestCase):
     def test_spill_accumulates_after_overflow(self):
         tank = TankModel(level0=9.99)
         for _ in range(50):
-            tank.step(dt=1.0, feed_valve=1.0)
+            tank.step(dt=1.0, feed_cmd=1.0)
         self.assertTrue(tank.overflowing)
         self.assertGreater(tank.spilled_volume, 0.0)
 
@@ -97,7 +97,7 @@ class TestDraining(unittest.TestCase):
         tank = TankModel(level0=1.0)  # valve shut, q_out=0.02 draws it down
         prev = tank.level
         for _ in range(500):
-            tank.step(dt=1.0, feed_valve=0.0)
+            tank.step(dt=1.0, feed_cmd=0.0)
             self.assertLessEqual(tank.level, prev + 1e-12)
             prev = tank.level
         self.assertEqual(tank.level, 0.0)
@@ -111,7 +111,7 @@ class TestNumericalSanity(unittest.TestCase):
         tank = TankModel(level0=5.0)
         n = round(total_time / dt)
         for _ in range(n):
-            tank.step(dt=dt, feed_valve=valve)
+            tank.step(dt=dt, feed_cmd=valve)
         return tank.level
 
     def test_timestep_invariance(self):
@@ -125,7 +125,7 @@ class TestNumericalSanity(unittest.TestCase):
     def test_no_nan_or_inf(self):
         tank = TankModel()
         for _ in range(1000):
-            tank.step(dt=1.0, feed_valve=1.0)
+            tank.step(dt=1.0, feed_cmd=1.0)
             self.assertTrue(math.isfinite(tank.level))
             self.assertTrue(math.isfinite(tank.spilled_volume))
 
@@ -137,13 +137,13 @@ class TestValveAndValidation(unittest.TestCase):
         over = TankModel(level0=5.0)
         exactly_open = TankModel(level0=5.0)
         for _ in range(50):
-            over.step(dt=1.0, feed_valve=5.0)       # >1 behaves like 1
-            exactly_open.step(dt=1.0, feed_valve=1.0)
+            over.step(dt=1.0, feed_cmd=5.0)       # >1 behaves like 1
+            exactly_open.step(dt=1.0, feed_cmd=1.0)
         self.assertAlmostEqual(over.level, exactly_open.level, places=9)
 
         neg = TankModel(q_out=0.0, level0=3.0)
         for _ in range(50):
-            neg.step(dt=1.0, feed_valve=-2.0)       # <0 behaves like 0
+            neg.step(dt=1.0, feed_cmd=-2.0)       # <0 behaves like 0
         self.assertAlmostEqual(neg.level, 3.0, places=9)
 
     def test_rejects_bad_params(self):
@@ -159,7 +159,7 @@ class TestValveAndValidation(unittest.TestCase):
     def test_rejects_bad_dt(self):
         tank = TankModel()
         with self.assertRaises(ValueError):
-            tank.step(dt=0.0, feed_valve=1.0)
+            tank.step(dt=0.0, feed_cmd=1.0)
 
 
 if __name__ == "__main__":

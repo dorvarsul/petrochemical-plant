@@ -27,6 +27,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from common import scenarios
+from common.scenarios import Scenario
+
 
 @dataclass
 class TankModel:
@@ -52,10 +55,14 @@ class TankModel:
     # --- Initial condition ---
     level0: float = 5.0         # initial level (m)
 
+    # --- Scenario descriptor (for the uniform bridge/HMI/3D interface) ---
+    scenario: Scenario = field(default_factory=lambda: scenarios.get("tank"))
+
     # --- State (set in __post_init__ / reset) ---
     level: float = field(init=False)
     spilled_volume: float = field(init=False)
     time: float = field(init=False)
+    applied_feed: float = field(init=False)
 
     def __post_init__(self) -> None:
         self._validate()
@@ -76,6 +83,7 @@ class TankModel:
         self.level = self.level0
         self.spilled_volume = 0.0
         self.time = 0.0
+        self.applied_feed = 0.0
 
     # --- Derived quantities ---
     @property
@@ -93,23 +101,37 @@ class TankModel:
         """True once the tank has reached its brim — the failure condition."""
         return self.level >= self.height_full
 
+    # --- Uniform ProcessModel interface (shared with vessel/reactor) ---
+    @property
+    def pv(self) -> float:
+        """Process variable for this scenario: the liquid level (m)."""
+        return self.level
+
+    @property
+    def failed(self) -> bool:
+        """Failure condition (alias of ``overflowing``)."""
+        return self.overflowing
+
     def inflow(self, feed_valve: float) -> float:
         """Feed flow (m^3/s) for a given valve command, clamped to [0,1]."""
         return _clamp(feed_valve, 0.0, 1.0) * self.q_in_max
 
     # --- Integration ---
-    def step(self, dt: float, feed_valve: float) -> float:
-        """Advance the model by ``dt`` seconds under a ``feed_valve`` command.
+    def step(self, dt: float, feed_cmd: float, trip: bool = False) -> float:
+        """Advance the model by ``dt`` seconds under the layer commands.
 
-        ``feed_valve`` is the fraction open in [0, 1] (values outside are
-        clamped). Returns the new level. Explicit Euler — exact for this
-        constant-derivative ODE, so the result is timestep-independent away
-        from the clamps.
+        ``feed_cmd`` is the BPCS feed-valve fraction in [0, 1] (values outside
+        are clamped). ``trip`` is the SIS protective action: a trip forces the
+        feed shut, so the effective feed is ``0 if trip else feed_cmd``. Returns
+        the new level. Explicit Euler — exact for this constant-derivative ODE,
+        so the result is timestep-independent away from the clamps.
         """
         if dt <= 0:
             raise ValueError("dt must be > 0")
 
-        q_in = self.inflow(feed_valve)
+        effective_feed = 0.0 if trip else feed_cmd
+        self.applied_feed = _clamp(effective_feed, 0.0, 1.0)
+        q_in = self.inflow(effective_feed)
         dLdt = (q_in - self.q_out) / self.area
 
         raw_level = self.level + dLdt * dt
@@ -152,7 +174,7 @@ def _demo() -> None:
     print(f"{'t (s)':>7} {'level (m)':>10} {'fraction':>9}  status")
 
     for _ in range(300):
-        tank.step(dt, feed_valve=1.0)
+        tank.step(dt, feed_cmd=1.0)
         if t_trip is None and tank.level >= tank.level_trip_hh:
             t_trip = tank.time
         if t_overflow is None and tank.overflowing:
