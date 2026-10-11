@@ -1,0 +1,91 @@
+# PLC layer — two OpenPLC v3 instances (Phase 0)
+
+The PLC layer is **two independent OpenPLC v3 soft-PLCs**, each a Modbus TCP
+slave, matching the documented stack (IEC 61131-3 Structured Text + Modbus):
+
+| Instance | Role                         | ST program        | Web UI                  | Modbus slave      |
+|----------|------------------------------|-------------------|-------------------------|-------------------|
+| `bpcs`   | Control PLC (BPCS)           | `bpcs/bpcs.st`    | http://localhost:8081   | `localhost:5020`  |
+| `sis`    | Safety PLC (SIS) — attack target | `sis/sis.st`  | http://localhost:8082   | `localhost:5021`  |
+
+The Modbus ports match `ENDPOINTS` in `common/registers.py`; the ST programs'
+`%QW`/`%QX` located variables match the register map in `ARCHITECTURE.md`.
+
+> OpenPLC v3 is end-of-life (superseded by OpenPLC Runtime v4). It is used here
+> because it faithfully provides the documented stack. Moving to v4 (or to the
+> mechanism-level work) is a later-phase decision.
+
+## 1. Build the image (once)
+
+Built from pinned official source — no third-party image is pulled:
+
+```bash
+cd plc
+docker compose build          # clones OpenPLC_v3 @ b5d4135 and builds petrotwin/openplc:v3
+```
+
+## 2. Start both PLCs
+
+```bash
+docker compose up -d
+docker compose ps             # both containers should be "running"
+```
+
+## 3. Load + start each program (one-time, via the web UI)
+
+OpenPLC v3 loads and compiles ST programs through its web interface; there is no
+reliable headless path, so this is a manual one-time step per instance. Default
+login is **`openplc` / `openplc`**.
+
+For **BPCS** (http://localhost:8081) load `bpcs/bpcs.st`, and for
+**SIS** (http://localhost:8082) load `sis/sis.st`. In each UI:
+
+1. **Programs → Upload Program** → choose the `.st` file → **Upload**.
+2. On the program page, click **Compile** → wait for "Compilation finished successfully".
+3. **Settings** → enable **Modbus Server** (Enabled), leave port **502** → **Save**.
+4. **Dashboard → Start PLC**. The status should read "running".
+
+> Load the **right** program into the **right** instance — `bpcs.st` into `bpcs`
+> (8081), `sis.st` into `sis` (8082). They are not interchangeable.
+
+## 4. Verify the Modbus slaves are listening
+
+```bash
+# from the repo root
+python3 - <<'PY'
+import socket
+for name, port in (("bpcs", 5020), ("sis", 5021)):
+    s = socket.socket(); s.settimeout(2)
+    try:
+        s.connect(("127.0.0.1", port)); print(f"{name}: {port} OPEN")
+    except OSError as e:
+        print(f"{name}: {port} closed ({e})")
+    finally:
+        s.close()
+PY
+```
+
+Functional round-trip (writing a sensor into `%QW0` and reading back the PLC's
+outputs) is exercised by the Modbus bridge in Phase-0 step 4, with tests per
+`TESTING.md` section 3.
+
+## Modbus mapping (recap)
+
+Authoritative map: `common/registers.py` / `ARCHITECTURE.md`. OpenPLC maps
+`%QWk` → holding register `k` and `%QXn.m` → coil `n*8+m`. A Modbus master may
+write coils and holding registers and read every table, so the bridge injects
+sensor values into the `%QW` holding registers the programs only read.
+
+- **BPCS** holding: `0` `BPCS_LEVEL_PV` (sensor in), `1` `BPCS_FEED_CMD` (out).
+- **SIS** coils: `0` `SIS_TRIP_CMD` (out), `1` `SIS_TRIP_STATUS` (out),
+  `2` `SIS_OVERRIDE` (attacker in). SIS holding: `0` `SIS_LEVEL_PV` (sensor in),
+  `1` `SIS_LEVEL_HMI` (out, frozen under override).
+
+## Stop / reset
+
+```bash
+docker compose down           # stop and remove containers
+```
+
+Uploaded programs and settings persist in each container's `/docker_persistent`
+volume; after `down` + `up` you may need to **Start PLC** again from the UI.

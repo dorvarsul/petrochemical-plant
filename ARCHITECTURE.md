@@ -134,10 +134,16 @@ conventions:
   into holding registers the PLC program treats as read-only inputs, and *reads*
   back the coils/registers the program drives as outputs. (A more faithful
   input-register / discrete-input mapping is a Phase-2 item.)
-- Values are grouped by owner: a **Control PLC (BPCS)** block (addresses `0–9`) and
-  a **Safety PLC (SIS)** block (addresses `10–19`), on separate slave units so the
-  two PLCs stay independent. Coils and holding registers are separate address
-  spaces, so a coil `10` and a holding register `10` are distinct.
+- The two PLCs are **separate Modbus slaves** (two OpenPLC instances on different
+  host ports), each with its **own address space starting at 0**. The bridge
+  addresses a register by *(instance, table, address)*, not one shared namespace.
+  Coils and holding registers are separate tables, so coil `0` and holding
+  register `0` on the same instance are distinct.
+- OpenPLC maps IEC 61131-3 located variables to Modbus as `%QWk` → holding
+  register `k` and `%QXn.m` → coil `n*8+m`. A Modbus master may **write** coils and
+  holding registers and **read** every table, so sensor values are injected into
+  `%QW` holding registers that the program treats as inputs. (`%IW`/`%IX` are not
+  master-writable; a faithful input mapping is a Phase-2 item.)
 - Analog values are scaled to integers: **level in millimetres**
   (`mm = round(level_m × 1000)`, range `0–10000`) and **valve position in per-mille**
   (`0–1000`). Scale/units documented per row.
@@ -155,12 +161,13 @@ not a claim of plant fidelity:
   Phase-0 simplification; distributed display sourcing is a Phase-2 topic.)
 - **Protective action:** at level ≥ high-high (`trip_hh`, 9 m), the healthy SIS
   asserts `SIS_TRIP_CMD`; the bridge applies it as feed-shut and the tank holds safe.
-- **Attack (Safety PLC only):** the attacker sets `SIS_OVERRIDE`, which makes the SIS
-  logic (a) hold `SIS_TRIP_CMD` deasserted (feed never shuts) and (b) pass
-  attacker-held values to `SIS_TRIP_STATUS` ("armed") and `SIS_LEVEL_HMI` (frozen near
-  setpoint). The physics rises to overflow while the HMI stays green. This abuses a
-  force/override path reachable over Modbus — the attack **pattern**, not Triton's
-  program-injection **mechanism** (Phase 3). See `OVERVIEW.md` scope limit.
+- **Attack (Safety PLC only):** the attacker sets `SIS_OVERRIDE`, after which the SIS
+  logic holds `SIS_TRIP_CMD` and `SIS_TRIP_STATUS` deasserted (no trip, indicator
+  "armed") and **stops refreshing** `SIS_LEVEL_HMI`, so the operator's level freezes at
+  its last nominal value while the true level keeps rising. The physics runs to
+  overflow while the HMI stays green. This abuses a force/override path reachable over
+  Modbus — the attack **pattern**, not Triton's program-injection **mechanism**
+  (Phase 3). See `OVERVIEW.md` scope limit.
 - **Effective feed applied to the physics each bridge cycle:**
   `feed = 0 if SIS_TRIP_CMD else BPCS_FEED_CMD`, where a healthy SIS computes
   `SIS_TRIP_CMD = latch(level ≥ trip_hh)` unless `SIS_OVERRIDE` is set.
@@ -169,25 +176,37 @@ not a claim of plant fidelity:
 
 ### Register map — Phase 0 (tank overfill)
 
-**Coils** (1-bit, master read/write)
+Two slaves, each addressed from 0. Addresses below are the Modbus addresses the
+bridge uses; `ST var` is the OpenPLC located variable the program declares.
 
-| Addr | Name              | Owner       | Direction            | Meaning                                                                 |
-|------|-------------------|-------------|----------------------|-------------------------------------------------------------------------|
-| `10` | `SIS_TRIP_CMD`    | Safety/SIS  | PLC → physics (bridge)| 1 = trip (force feed shut). Healthy SIS sets at level ≥ `trip_hh`, latched. **Attack holds 0.** |
-| `11` | `SIS_TRIP_STATUS` | Safety/SIS  | PLC → HMI            | 1 = tripped/shutdown, 0 = armed-normal (operator indicator). **Attack holds 0.** |
-| `12` | `SIS_OVERRIDE`    | Safety/SIS  | attack → PLC         | 0 normal; 1 = force/bypass (suppress trip + pass attacker HMI values). **Attack sets 1.** |
+**Control PLC — BPCS** · Modbus slave, default `localhost:5020`
 
-**Holding registers** (16-bit, master read/write)
+Holding registers (16-bit, master read/write):
 
-| Addr | Name            | Owner       | Direction         | Units / scale        | Meaning                                                             |
-|------|-----------------|-------------|-------------------|----------------------|--------------------------------------------------------------------|
-| `0`  | `BPCS_LEVEL_PV` | Control/BPCS| physics → PLC     | mm (`0–10000`)       | true level measured by the BPCS (bridge writes)                    |
-| `1`  | `BPCS_FEED_CMD` | Control/BPCS| PLC → physics     | per-mille (`0–1000`) | fill-valve position; Phase-0 holds `1000` (open)                   |
-| `10` | `SIS_LEVEL_PV`  | Safety/SIS  | physics → PLC     | mm (`0–10000`)       | true level measured by the SIS (bridge writes; independent sensor) |
-| `11` | `SIS_LEVEL_HMI` | Safety/SIS  | PLC → HMI         | mm (`0–10000`)       | level shown to operator; equals PV normally. **Attack freezes near `5000`.** |
+| Addr | ST var | Name            | Direction                  | Units / scale        | Meaning                                         |
+|------|--------|-----------------|----------------------------|----------------------|-------------------------------------------------|
+| `0`  | `%QW0` | `BPCS_LEVEL_PV` | physics → PLC (master wr.) | mm (`0–10000`)       | true level measured by BPCS; program reads it   |
+| `1`  | `%QW1` | `BPCS_FEED_CMD` | PLC → physics (master rd.) | per-mille (`0–1000`) | fill-valve position; Phase-0 program holds `1000` (open) |
 
-> This table is authoritative. The bridge, both PLC programs, the HMI, and the attack
-> script must import these names/addresses from one shared definition (e.g. a single
-> `registers` module) — never hard-code addresses per file. A per-scan heartbeat
-> register (so a frozen HMI is detectable) is deliberately **omitted** in Phase 0 and
-> noted as a Phase-2 detection hook.
+**Safety PLC — SIS** · Modbus slave, default `localhost:5021`
+
+Coils (1-bit, master read/write):
+
+| Addr | ST var   | Name              | Direction                  | Meaning                                                                        |
+|------|----------|-------------------|----------------------------|--------------------------------------------------------------------------------|
+| `0`  | `%QX0.0` | `SIS_TRIP_CMD`    | PLC → physics (master rd.) | 1 = trip (force feed shut). Healthy SIS latches at level ≥ `trip_hh`. **Attack holds 0.** |
+| `1`  | `%QX0.1` | `SIS_TRIP_STATUS` | PLC → HMI (master rd.)      | 1 = tripped, 0 = armed-normal (operator indicator). **Attack holds 0.**        |
+| `2`  | `%QX0.2` | `SIS_OVERRIDE`    | attack → PLC (master wr.)   | 0 normal; 1 = force/bypass. Program only reads it. **Attack sets 1.**          |
+
+Holding registers (16-bit, master read/write):
+
+| Addr | ST var | Name            | Direction                  | Units / scale  | Meaning                                                                      |
+|------|--------|-----------------|----------------------------|----------------|------------------------------------------------------------------------------|
+| `0`  | `%QW0` | `SIS_LEVEL_PV`  | physics → PLC (master wr.) | mm (`0–10000`) | true level measured by SIS; program reads it (independent sensor)            |
+| `1`  | `%QW1` | `SIS_LEVEL_HMI` | PLC → HMI (master rd.)     | mm (`0–10000`) | displayed level = PV normally; under `SIS_OVERRIDE` the program stops updating it, so it **freezes** at its last nominal value |
+
+> This map is authoritative and lives in code as `common/registers.py` — the bridge,
+> both PLC programs, the HMI, and the attack script import names/addresses from there,
+> never hard-coding per file. A per-scan heartbeat register (so a frozen HMI would be
+> detectable) is deliberately **omitted** in Phase 0 and noted as a Phase-2 detection
+> hook.

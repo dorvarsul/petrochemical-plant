@@ -1,0 +1,28 @@
+# PetroTwin PLC layer - two OpenPLC v3 instances (Phase 0).
+#
+# One shared image, built once from pinned official source, run as two
+# independent soft-PLCs on different host ports. See plc/README.md.
+#
+# Note: OpenPLC v3 is EOL (superseded by OpenPLC Runtime v4). v3 is used here
+# because it matches the documented stack: IEC 61131-3 (ST) + a built-in Modbus
+# TCP slave, as common ICS testbeds use.
+
+services:
+  bpcs:                              # Control PLC (BPCS)
+    build:
+      # Pinned commit for reproducibility; built from official source, no 3rd-party image.
+      context: "https://github.com/thiagoralves/OpenPLC_v3.git#b5d41356dab4aeadca0dd7ca64ba542f870b595d"
+    image: petrotwin/openplc:v3
+    container_name: petrotwin-bpcs
+    ports:
+      - "8081:8080"                  # web UI  -> http://localhost:8081  (login openplc/openplc)
+      - "5020:502"                   # Modbus TCP slave -> matches ENDPOINTS[BPCS] in common/registers.py
+    restart: unless-stopped
+
+  sis:                               # Safety PLC (SIS) - the attack target
+    image: petrotwin/openplc:v3      # reuse the image built by the bpcs service
+    container_name: petrotwin-sis
+    ports:
+      - "8082:8080"                  # web UI  -> http://localhost:8082  (login openplc/openplc)
+      - "5021:502"                   # Modbus TCP slave -> matches ENDPOINTS[SIS] in common/registers.py
+    restart: unless-stopped

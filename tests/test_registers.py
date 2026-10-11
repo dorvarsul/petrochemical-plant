@@ -1,7 +1,7 @@
 """Tests for the shared register map (common/registers.py).
 
 Guards the single source of truth: scaling round-trips, clamping at range
-edges, and the owner-block / address-space invariants described in
+edges, and the per-instance address-space / metadata invariants described in
 ARCHITECTURE.md.
 """
 
@@ -32,18 +32,50 @@ class TestScaling(unittest.TestCase):
 
 class TestMapInvariants(unittest.TestCase):
     def test_every_register_has_info(self):
-        self.assertEqual(set(R.Coil), set(R.COIL_INFO))
-        self.assertEqual(set(R.Holding), set(R.HOLDING_INFO))
+        keys = set(R.REGISTERS)
+        expected = {
+            (R.Instance.BPCS, "holding", R.BpcsHolding.LEVEL_PV),
+            (R.Instance.BPCS, "holding", R.BpcsHolding.FEED_CMD),
+            (R.Instance.SIS, "coil", R.SisCoil.TRIP_CMD),
+            (R.Instance.SIS, "coil", R.SisCoil.TRIP_STATUS),
+            (R.Instance.SIS, "coil", R.SisCoil.OVERRIDE),
+            (R.Instance.SIS, "holding", R.SisHolding.LEVEL_PV),
+            (R.Instance.SIS, "holding", R.SisHolding.LEVEL_HMI),
+        }
+        self.assertEqual(keys, expected)
 
-    def test_owner_blocks(self):
-        # BPCS holding registers in 0-9; SIS coils and holding regs in 10-19.
-        self.assertTrue(all(0 <= a <= 9 for a, i in R.HOLDING_INFO.items() if i.owner == "BPCS"))
-        self.assertTrue(all(10 <= a <= 19 for a, i in R.HOLDING_INFO.items() if i.owner == "SIS"))
-        self.assertTrue(all(10 <= a <= 19 for a in R.Coil))
+    def test_info_matches_key(self):
+        for (inst, table, _addr), info in R.REGISTERS.items():
+            self.assertEqual(info.instance, inst)
+            self.assertEqual(info.table, table)
 
-    def test_addresses_unique_within_space(self):
-        self.assertEqual(len(list(R.Coil)), len(set(R.Coil)))
-        self.assertEqual(len(list(R.Holding)), len(set(R.Holding)))
+    def test_each_instance_addresses_from_zero(self):
+        # Per-instance address spaces both start at 0 (independent slaves).
+        self.assertEqual(min(R.BpcsHolding), 0)
+        self.assertEqual(min(R.SisCoil), 0)
+        self.assertEqual(min(R.SisHolding), 0)
+
+    def test_addresses_unique_within_table(self):
+        for enum_cls in (R.BpcsHolding, R.SisCoil, R.SisHolding):
+            addrs = [int(m) for m in enum_cls]
+            self.assertEqual(len(addrs), len(set(addrs)))
+
+    def test_qw_mapping_matches_address(self):
+        # OpenPLC %QWk -> holding register k, so the ST var index must equal the addr.
+        for (_inst, table, addr), info in R.REGISTERS.items():
+            if table == "holding":
+                self.assertEqual(info.st_var, f"%QW{int(addr)}")
+
+    def test_qx_mapping_matches_address(self):
+        # OpenPLC %QXn.m -> coil n*8+m; Phase-0 coils live in byte 0.
+        for (_inst, table, addr), info in R.REGISTERS.items():
+            if table == "coil":
+                self.assertEqual(info.st_var, f"%QX0.{int(addr)}")
+
+    def test_endpoints_distinct(self):
+        self.assertEqual(set(R.ENDPOINTS), set(R.Instance))
+        ports = [p for _h, p in R.ENDPOINTS.values()]
+        self.assertEqual(len(ports), len(set(ports)))
 
     def test_ranges_fit_u16(self):
         self.assertLessEqual(R.LEVEL_REG_MAX, R.REG_U16_MAX)
