@@ -28,8 +28,22 @@ from common import registers as R
 from common import scenarios
 from physics import make_model
 from plc.load_program import restart_runtime
+from plc.load_scenario import load_scenario
 
 SCENARIO = os.environ.get("PETROTWIN_SCENARIO", scenarios.DEFAULT_SCENARIO)
+
+
+def _scenario_meta(sc):
+    """Per-scenario labels/units/thresholds the dashboard renders generically."""
+    return {
+        "id": sc.id, "title": sc.title, "unit_tag": sc.unit_tag,
+        "pv_name": sc.pv_name, "pv_units": sc.pv_units, "pv_symbol": sc.pv_symbol,
+        "setpoint": sc.setpoint, "trip_hh": sc.trip_hh, "fail_at": sc.fail_at,
+        "trip_frac": round(sc.fraction(sc.trip_hh), 4),
+        "sp_frac": round(sc.fraction(sc.setpoint), 4),
+        "failure_word": sc.failure_word, "actuator": sc.actuator,
+        "trip_action": sc.trip_action, "ids": scenarios.ids(),
+    }
 
 STATIC = Path(__file__).parent / "static"
 HOST, PORT = "127.0.0.1", 8090
@@ -43,17 +57,21 @@ class SimRunner(threading.Thread):
         self._lock = threading.Lock()
         self._attack = False
         self._reset = False
+        self._switch_to = None
         self._stop = False
         self.scenario = scenarios.get(SCENARIO)
         self.model = make_model(SCENARIO)
-        f0 = self.scenario.fraction(self.scenario.pv0)
-        self._snap = {"time": 0.0,
-                      "truth": {"level": self.scenario.pv0, "fraction": f0,
-                                "overflowing": False},
-                      "hmi": {"level": self.scenario.pv0, "fraction": f0,
-                              "trip_status": False},
-                      "feed": 1.0, "trip": False, "attacked": False}
-        self.bpcs = self.sis = self.bridge = None  # connected in run(), after reset
+        self._snap = self._fresh_snap(status="loading")
+        self.bpcs = self.sis = self.bridge = None  # connected in run(), after load
+
+    def _fresh_snap(self, status, attacked=False):
+        sc = self.scenario
+        f0 = sc.fraction(sc.pv0)
+        return {"time": 0.0, "status": status,
+                "truth": {"level": sc.pv0, "fraction": f0, "overflowing": False},
+                "hmi": {"level": sc.pv0, "fraction": f0, "trip_status": False},
+                "feed": 1.0, "trip": False, "attacked": attacked,
+                "scenario": _scenario_meta(sc)}
 
     def _connect(self, attempts=12):
         for c in (self.bpcs, self.sis):
@@ -80,6 +98,16 @@ class SimRunner(threading.Thread):
     def request_reset(self):
         self._reset = True
 
+    def request_scenario(self, sid):
+        if sid in scenarios.SCENARIOS:
+            self._switch_to = sid
+            return True
+        return False
+
+    def _set_status(self, status):
+        with self._lock:
+            self._snap = dict(self._snap, status=status)
+
     def snapshot(self):
         with self._lock:
             return dict(self._snap)
@@ -100,7 +128,7 @@ class SimRunner(threading.Thread):
         H = self.scenario.pv_full_scale
         with self._lock:
             self._snap = {
-                "time": round(s.time, 1),
+                "time": round(s.time, 1), "status": "running",
                 "truth": {"level": round(s.true_pv, 3),
                           "fraction": round(self.model.fraction, 4),
                           "overflowing": self.model.failed},
@@ -110,23 +138,42 @@ class SimRunner(threading.Thread):
                 "feed": round(s.feed, 3),
                 "trip": s.trip_cmd,
                 "attacked": attacked,
+                "scenario": _scenario_meta(self.scenario),
             }
 
-    def run(self):
-        # Clean start: reset both runtimes (clears any latched trip / override),
-        # THEN connect — the restart drops any existing Modbus connections.
-        restart_runtime(BPCS_WEB)
-        restart_runtime(SIS_WEB)
+    def _load_scenario_live(self, sid):
+        """(Re)load the scenario's PLC programs, rebuild the model, warm up."""
+        self.scenario = scenarios.get(sid)
+        self.model = make_model(sid)
+        with self._lock:
+            self._snap = self._fresh_snap(status="loading")
+        load_scenario(sid, BPCS_WEB, SIS_WEB)  # login/upload/compile/start both PLCs
         self._connect()
         self._warmup()
+
+    def run(self):
+        # The server loads the chosen scenario's programs itself, so the only
+        # prerequisite is that the two OpenPLC containers are up.
+        self._load_scenario_live(self.scenario.id)
         attacked = False
         while not self._stop:
+            if self._switch_to:
+                sid, self._switch_to = self._switch_to, None
+                self._attack = self._reset = False
+                attacked = False
+                try:
+                    self._load_scenario_live(sid)
+                except Exception:
+                    self._set_status("error")
+                    time.sleep(1.0)
+                continue
             if self._reset:
+                self._reset = False
+                self._attack = False
+                attacked = False
+                self._set_status("loading")
                 restart_runtime(BPCS_WEB)
                 restart_runtime(SIS_WEB)
-                self._attack = False
-                self._reset = False
-                attacked = False
                 self._connect()
                 self._warmup()
             try:
@@ -176,6 +223,16 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/reset"):
             RUNNER.request_reset()
             self._send(200, json.dumps({"ok": True}), "application/json")
+        elif self.path.startswith("/api/scenario"):
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                sid = body.get("id", "")
+            except (ValueError, TypeError):
+                sid = ""
+            ok = RUNNER.request_scenario(sid)
+            self._send(200 if ok else 400, json.dumps({"ok": ok}),
+                       "application/json")
         else:
             self._send(404, "not found", "text/plain")
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PetroTwin — T-101</title>
+<title>PetroTwin</title>
 <style>
   :root { --bg:#0d1016; --panel:#141a22; --line:#232c38; --txt:#e7edf5;
           --dim:#8aa0b5; --green:#27d07a; --red:#ff4d4d; --amber:#ffb020;
@@ -12,21 +12,22 @@
   html,body { margin:0; height:100%; background:var(--bg); color:var(--txt);
               font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
   body { display:flex; flex-direction:column; }
-  header { display:flex; align-items:center; gap:16px; padding:10px 18px;
-           border-bottom:1px solid var(--line); background:var(--panel); }
+  header { display:flex; align-items:center; gap:14px; padding:10px 18px;
+           border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.3px; }
   header .meta { color:var(--dim); font-size:13px; }
   header .spacer { flex:1; }
-  button { font:inherit; font-weight:600; border:1px solid var(--line);
-           background:#1b2430; color:var(--txt); padding:8px 14px; border-radius:8px;
+  select, button { font:inherit; font-weight:600; border:1px solid var(--line);
+           background:#1b2430; color:var(--txt); padding:8px 12px; border-radius:8px;
            cursor:pointer; }
-  button:hover { border-color:#3a4759; }
+  button:hover, select:hover { border-color:#3a4759; }
   button.attack { background:#3a1414; border-color:#5e1d1d; color:#ff8b8b; }
   button.attack:hover { background:#4d1818; }
+  button:disabled { opacity:.5; cursor:default; }
   .legend { padding:6px 18px; font-size:12px; color:var(--dim);
             border-bottom:1px solid var(--line); background:#10151c; }
   .legend b { color:var(--txt); }
-  main { flex:1; display:flex; min-height:0; }
+  main { flex:1; display:flex; min-height:0; position:relative; }
   .panel { flex:1; min-width:0; display:flex; flex-direction:column; }
   .panel + .panel { border-left:1px solid var(--line); }
   .panel h2 { margin:0; padding:10px 16px; font-size:13px; letter-spacing:1px;
@@ -62,15 +63,27 @@
   .overlay .label { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
   .rupture { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
              background:rgba(120,10,10,.28); color:#ffd3d3; font-size:30px; font-weight:800;
-             letter-spacing:2px; text-shadow:0 2px 12px #000; }
+             letter-spacing:2px; text-shadow:0 2px 12px #000; text-align:center; padding:20px; }
   .rupture.on { display:flex; }
+  /* ---- loading/error veil ---- */
+  .veil { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+          background:rgba(7,10,14,.82); color:var(--txt); font-size:18px; font-weight:600;
+          z-index:5; text-align:center; padding:24px; }
+  .veil.on { display:flex; }
 </style>
 </head>
 <body>
   <header>
-    <h1>PetroTwin · Tank T-101</h1>
-    <span class="meta">overfill scenario · <span id="clock">t = 0.0 s</span></span>
+    <h1 id="title">PetroTwin</h1>
+    <span class="meta"><span id="scenSub">—</span> · <span id="clock">t = 0.0 s</span></span>
     <span class="spacer"></span>
+    <label class="meta">scenario
+      <select id="scenSel">
+        <option value="tank">Tank overfill</option>
+        <option value="vessel">Vessel overpressure</option>
+        <option value="reactor">Reactor runaway</option>
+      </select>
+    </label>
     <span id="attackChip" class="meta">attack: inactive</span>
     <button class="attack" id="btnAttack">Inject attack</button>
     <button id="btnReset">Reset</button>
@@ -78,22 +91,22 @@
   <div class="legend">
     <b>Left — Operator HMI:</b> polled from the Safety PLC over Modbus (spoofable).
     &nbsp;·&nbsp; <b>Right — Ground truth:</b> read from the physics model directly (unspoofable).
-    When the SIS is overridden, the HMI stays nominal while the true tank runs to overflow.
+    <span id="legendTail">When the SIS is overridden, the HMI stays nominal while the true process runs to failure.</span>
   </div>
   <main>
     <section class="panel">
       <h2>Operator HMI / SCADA</h2>
-      <div class="src">source: Safety PLC (SIS) · Modbus holding reg SIS_LEVEL_HMI + coil SIS_TRIP_STATUS</div>
+      <div class="src">source: Safety PLC (SIS) · Modbus holding reg SIS_PV_HMI + coil SIS_TRIP_STATUS</div>
       <div class="hmi">
         <div class="gauge">
           <div class="fill" id="hmiFill" style="height:50%"></div>
-          <div class="mark trip" style="bottom:90%">HH trip 9.0 m</div>
-          <div class="mark" style="bottom:50%">SP 5.0 m</div>
+          <div class="mark trip" id="markTrip" style="bottom:90%">HH trip</div>
+          <div class="mark" id="markSp" style="bottom:50%">SP</div>
         </div>
         <div class="readout">
           <div>
-            <div class="label">Tank level</div>
-            <div class="big"><span id="hmiLevel">5.000</span> <span>m</span></div>
+            <div class="label" id="hmiPvLabel">Process variable</div>
+            <div class="big"><span id="hmiLevel">—</span> <span id="hmiUnit">—</span></div>
           </div>
           <div class="lamp ok" id="hmiLamp"><span class="dot"></span><span id="hmiLampTxt">SIS ARMED</span></div>
           <div class="label" id="hmiNote">status: normal operation</div>
@@ -107,19 +120,23 @@
       <div class="view">
         <canvas id="c3d"></canvas>
         <div class="overlay">
-          <div class="label">True tank level</div>
-          <div class="big"><span id="trueLevel">5.000</span> m</div>
+          <div class="label" id="truePvLabel">True process variable</div>
+          <div class="big"><span id="trueLevel">—</span> <span id="trueUnit"></span></div>
         </div>
-        <div class="rupture" id="rupture">● TANK OVERFLOW / LOSS OF CONTAINMENT ●</div>
+        <div class="rupture" id="rupture">● FAILURE ●</div>
       </div>
     </section>
+    <div class="veil" id="veil">Loading scenario on the PLCs…</div>
   </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (function () {
   "use strict";
-  var H3D = 3.0;              // 3D tank height in scene units (= 10 m)
+  var H3D = 3.0;  // vessel height in scene units
+
+  // per-scenario normal accent for the 3D content
+  var BASE = { tank: 0x3a7bff, vessel: 0x2bd4c4, reactor: 0xff7a2a };
 
   // ---- Three.js scene ----
   var canvas = document.getElementById("c3d");
@@ -129,44 +146,38 @@
   var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
   camera.position.set(4.2, 2.6, 5.2);
   camera.lookAt(0, 0, 0);
-
   scene.add(new THREE.AmbientLight(0x6677aa, 0.8));
   var dir = new THREE.DirectionalLight(0xffffff, 0.9);
   dir.position.set(5, 8, 6); scene.add(dir);
-
   var group = new THREE.Group(); scene.add(group);
 
-  // ground
-  var ground = new THREE.Mesh(
-    new THREE.CircleGeometry(4, 48),
+  var ground = new THREE.Mesh(new THREE.CircleGeometry(4, 48),
     new THREE.MeshStandardMaterial({ color: 0x10151c, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -H3D / 2 - 0.01; group.add(ground);
 
-  // tank shell (semi-transparent)
   var shell = new THREE.Mesh(
     new THREE.CylinderGeometry(1.25, 1.25, H3D, 40, 1, true),
     new THREE.MeshStandardMaterial({ color: 0x9fb4cc, transparent: true, opacity: 0.16,
                                      side: THREE.DoubleSide, roughness: 0.4, metalness: 0.2 }));
   group.add(shell);
-  // tank rings
   [-H3D / 2, H3D / 2].forEach(function (y) {
     var ring = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.03, 10, 40),
       new THREE.MeshStandardMaterial({ color: 0x4a5a70 }));
     ring.rotation.x = Math.PI / 2; ring.position.y = y; group.add(ring);
   });
 
-  // liquid
-  var liquidMat = new THREE.MeshStandardMaterial({ color: 0x3a7bff, roughness: 0.25,
-                                                   metalness: 0.1 });
-  var liquid = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.18, H3D, 40), liquidMat);
-  group.add(liquid);
+  var contentMat = new THREE.MeshStandardMaterial({ color: 0x3a7bff, roughness: 0.25,
+                                                    metalness: 0.1 });
+  var content = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.18, H3D, 40), contentMat);
+  group.add(content);
 
-  function setLevel(frac, overflowing, overTrip) {
+  function setContent(frac, failed, overTrip, baseHex) {
     frac = Math.max(0, Math.min(1, frac));
-    liquid.scale.y = Math.max(0.0001, frac);
-    liquid.position.y = -H3D / 2 + (frac * H3D) / 2;
-    var color = overflowing ? 0xff3b3b : (overTrip ? 0xffb020 : 0x3a7bff);
-    liquidMat.color.setHex(color);
+    content.scale.y = Math.max(0.0001, frac);
+    content.position.y = -H3D / 2 + (frac * H3D) / 2;
+    var color = failed ? 0xff3b3b : (overTrip ? 0xffb020 : baseHex);
+    contentMat.color.setHex(color);
+    contentMat.emissive.setHex(failed ? 0x551010 : 0x000000);
   }
 
   function resize() {
@@ -177,7 +188,6 @@
     camera.aspect = w / h; camera.updateProjectionMatrix();
   }
   window.addEventListener("resize", resize);
-
   function animate() {
     requestAnimationFrame(animate);
     group.rotation.y += 0.0035;
@@ -186,24 +196,63 @@
   }
   animate();
 
-  // ---- state polling ----
-  var elClock = document.getElementById("clock");
-  var elChip = document.getElementById("attackChip");
-  var elHmiFill = document.getElementById("hmiFill");
-  var elHmiLevel = document.getElementById("hmiLevel");
-  var elHmiLamp = document.getElementById("hmiLamp");
-  var elHmiLampTxt = document.getElementById("hmiLampTxt");
-  var elHmiNote = document.getElementById("hmiNote");
-  var elTrueLevel = document.getElementById("trueLevel");
-  var elRupture = document.getElementById("rupture");
+  // ---- DOM ----
+  var el = function (id) { return document.getElementById(id); };
+  var elClock = el("clock"), elChip = el("attackChip"), elTitle = el("title"),
+      elScenSub = el("scenSub"), elLegendTail = el("legendTail"),
+      elHmiFill = el("hmiFill"), elHmiLevel = el("hmiLevel"), elHmiUnit = el("hmiUnit"),
+      elHmiPvLabel = el("hmiPvLabel"), elHmiLamp = el("hmiLamp"),
+      elHmiLampTxt = el("hmiLampTxt"), elHmiNote = el("hmiNote"),
+      elTrueLevel = el("trueLevel"), elTrueUnit = el("trueUnit"),
+      elTruePvLabel = el("truePvLabel"), elRupture = el("rupture"),
+      elMarkTrip = el("markTrip"), elMarkSp = el("markSp"),
+      elSel = el("scenSel"), elVeil = el("veil"),
+      elBtnAttack = el("btnAttack"), elBtnReset = el("btnReset");
+
+  var curId = null;   // last scenario applied to the static labels
+  var selLock = false; // ignore server scenario while a user switch is pending
+
+  function dp(units) { return units === "°C" ? 1 : 3; }
+
+  function applyScenario(m) {
+    curId = m.id;
+    var u = m.pv_units, d = dp(u);
+    elTitle.textContent = "PetroTwin · " + m.title + " [" + m.unit_tag + "]";
+    elScenSub.textContent = m.pv_name + " · PV " + m.pv_symbol;
+    elLegendTail.textContent = "When the SIS is overridden, the HMI stays nominal while the true "
+      + m.pv_name + " runs past " + m.trip_hh + " " + u + " to " + m.failure_word + " at "
+      + m.fail_at + " " + u + ".";
+    elHmiPvLabel.textContent = m.pv_name + " (HMI)";
+    elTruePvLabel.textContent = "True " + m.pv_name;
+    elHmiUnit.textContent = u; elTrueUnit.textContent = u;
+    elMarkTrip.textContent = "HH trip " + m.trip_hh + " " + u;
+    elMarkTrip.style.bottom = (m.trip_frac * 100).toFixed(1) + "%";
+    elMarkSp.textContent = "SP " + m.setpoint + " " + u;
+    elMarkSp.style.bottom = (m.sp_frac * 100).toFixed(1) + "%";
+    elRupture.textContent = "● " + m.unit_tag + " " + m.failure_word
+      + " — " + m.trip_action.toUpperCase() + " DEFEATED ●";
+    if (!selLock) elSel.value = m.id;
+  }
 
   function render(st) {
+    var loading = st.status === "loading";
+    var error = st.status === "error";
+    elVeil.className = "veil" + (loading || error ? " on" : "");
+    if (error) elVeil.textContent = "Could not load scenario — is the PLC up?";
+    else elVeil.textContent = "Loading scenario on the PLCs…";
+    elBtnAttack.disabled = elBtnReset.disabled = loading;
+
+    if (st.scenario && st.scenario.id !== curId && !selLock) applyScenario(st.scenario);
+    if (st.scenario && st.scenario.id === elSel.value) selLock = false;
+    if (loading) return;
+
+    var m = st.scenario, u = m.pv_units, d = dp(u);
     elClock.textContent = "t = " + st.time.toFixed(1) + " s";
     elChip.textContent = "attack: " + (st.attacked ? "ACTIVE (SIS overridden)" : "inactive");
     elChip.style.color = st.attacked ? "#ff8b8b" : "#8aa0b5";
 
     // HMI (spoofable)
-    elHmiLevel.textContent = st.hmi.level.toFixed(3);
+    elHmiLevel.textContent = st.hmi.level.toFixed(d);
     elHmiFill.style.height = (st.hmi.fraction * 100).toFixed(1) + "%";
     var tripped = st.hmi.trip_status;
     elHmiFill.style.background = tripped ? "var(--red)" : "var(--green)";
@@ -212,8 +261,9 @@
     elHmiNote.textContent = tripped ? "status: shutdown" : "status: normal operation";
 
     // ground truth (unspoofable)
-    elTrueLevel.textContent = st.truth.level.toFixed(3);
-    setLevel(st.truth.fraction, st.truth.overflowing, st.truth.level >= 9.0);
+    elTrueLevel.textContent = st.truth.level.toFixed(d);
+    var overTrip = st.truth.level >= m.trip_hh;
+    setContent(st.truth.fraction, st.truth.overflowing, overTrip, BASE[m.id] || 0x3a7bff);
     elRupture.className = "rupture" + (st.truth.overflowing ? " on" : "");
   }
 
@@ -223,11 +273,15 @@
   }
   setInterval(poll, 200); poll();
 
-  document.getElementById("btnAttack").onclick = function () {
-    fetch("/api/attack", { method: "POST" });
-  };
-  document.getElementById("btnReset").onclick = function () {
-    fetch("/api/reset", { method: "POST" });
+  elBtnAttack.onclick = function () { fetch("/api/attack", { method: "POST" }); };
+  elBtnReset.onclick = function () { fetch("/api/reset", { method: "POST" }); };
+  elSel.onchange = function () {
+    selLock = true;
+    elVeil.className = "veil on"; elVeil.textContent = "Loading scenario on the PLCs…";
+    elBtnAttack.disabled = elBtnReset.disabled = true;
+    fetch("/api/scenario", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: elSel.value }) });
   };
 })();
 </script>
