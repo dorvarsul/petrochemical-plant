@@ -86,9 +86,10 @@
         <option value="vessel">V-201 vessel (overpressure)</option>
       </select>
     </label>
-    <label class="ctl"><input type="checkbox" id="spOnly"> setpoint-only</label>
+    <label class="ctl" title="Leave the SIS armed: manual-drive the actuator but do NOT bypass the trip — the defense-in-depth contrast"><input type="checkbox" id="spArmed"> leave SIS armed</label>
     <span id="attackChip" class="meta">attack: inactive</span>
     <button class="attack" id="btnAttack">Inject attack</button>
+    <button id="btnSisReset" title="Pulse the SIS reset pushbutton for the selected unit (clears a latched trip once the PV is back below the deadband)">Reset SIS</button>
     <button id="btnStand">Stand down</button>
     <button id="btnReset">Reset plant</button>
   </header>
@@ -670,9 +671,11 @@
 
   // ---- interactive valves (click to open/close, like real hand valves) ----
   // The crude FILL valve (head of T-101) and the product EXPORT valve (outlet of
-  // P-401) toggle on click; flows + the product level respond. These are on the
-  // cosmetic terminals, so toggling them is purely in the view for now — the
-  // real control-logic + HMI wiring is the next step (ST programs / HMI).
+  // P-401) are REAL PLC coils now: a click POSTs an open/close request, and the
+  // view state (feedOpen/exportOpen/pLevel) is driven back from /api/state — the
+  // tank's SIS block-valve final element (fill) and the vessel BPCS operator
+  // valve (export), plus the live P-401 level fraction. The fill valve also
+  // shows shut whenever the tank SIS trips (the final element forces it closed).
   var feedOpen = true, exportOpen = true, pLevel = 0.5;
   var clickables = [], raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2();
   function makeClickable(group, onToggle) {
@@ -717,8 +720,12 @@
   canvas.addEventListener("wheel", function (ev) {
     ev.preventDefault(); camR *= (ev.deltaY > 0 ? 1.08 : 0.92); updateCamera();
   }, { passive: false });
-  makeClickable(feedValve, function () { feedOpen = !feedOpen; });
-  makeClickable(pExportValve, function () { exportOpen = !exportOpen; });
+  function postValve(valve, isOpen) {
+    fetch("/api/valve", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ valve: valve, open: isOpen }) });
+  }
+  makeClickable(feedValve, function () { postValve("fill", !feedOpen); });
+  makeClickable(pExportValve, function () { postValve("export", !exportOpen); });
 
   // ---- render loop ----
   var clock = new THREE.Clock();
@@ -757,9 +764,8 @@
     cTR.update(0.10 + 0.3 * FEED.tank, COUP.tank_reactor, dt);
     cRV.update(0.16, COUP.reactor_vessel, dt);
     cProd.update(0.14, false, dt);
-    // product tank: bottoms keep arriving; the export valve draws it down
-    pLevel += (0.030 - (exportOpen ? 0.055 : 0)) * dt;
-    pLevel = Math.max(0, Math.min(1, pLevel));
+    // product tank: pLevel/exportOpen/feedOpen are driven from /api/state (the
+    // real P-401 level fraction + the two valve coils); here we only animate.
     pLiq.scale.y = Math.max(0.001, pLevel);
     pLiq.position.y = pTankBot + pLevel * pTankH * 0.92 / 2;
     pDrain.active = exportOpen && pLevel > 0.001; pDrain.update(dt);
@@ -776,10 +782,30 @@
   var strip = el("hmiStrip"), labels = el("labels");
   var clockEl = el("clock"), chip = el("attackChip"), legendTail = el("legendTail");
   var btnAttack = el("btnAttack"), btnStand = el("btnStand"), btnReset = el("btnReset");
-  var unitSel = el("unitSel"), spOnly = el("spOnly"), rupture = el("rupture");
+  var btnSisReset = el("btnSisReset");
+  var unitSel = el("unitSel"), spArmed = el("spArmed"), rupture = el("rupture");
 
   var tiles = {}, labEls = {}, flowEls = {}, staticLabels = [], built = false;
+  var pLabel = null;  // live P-401 level readout (captured in buildStrip)
   function dp(u) { return u === "°C" ? 1 : 3; }
+
+  // Build the small annunciator pills for an HMI tile from its state.
+  function chipHtml(m) {
+    var out = "";
+    function pill(txt, bg, fg) {
+      out += '<span style="font:600 9px/1.4 ui-monospace,monospace;padding:1px 5px;' +
+        'border-radius:3px;background:' + bg + ';color:' + (fg || "#0b0f14") + '">' + txt + '</span>';
+    }
+    // mode is always shown; MANUAL is the suspicious state
+    if (m.mode === "MAN") pill("MANUAL", "#ffb020"); else pill("AUTO", "#1f3a2a", "#7fe0c0");
+    if (m.bypass_active) pill("SIS BYPASS", "#ff5a5a", "#180404");
+    if (m.pv_bad) pill("PV BAD", "#ff5a5a", "#180404");
+    if (m.sp_clamped) pill("SP CLAMPED", "#ffb020");
+    if (m.prealarm_h) pill("H", "#ffb020");
+    if (m.pv_hi) pill("PVHI", "#ff8b4a");
+    if (m.pv_lo) pill("PVLO", "#4aa3ff");
+    return out;
+  }
 
   function buildStrip(st) {
     strip.innerHTML = ""; labels.innerHTML = "";
@@ -793,6 +819,7 @@
         '<div class="tag"><b>' + m.tag + '</b> · ' + m.title + '</div>' +
         '<div class="big"><span class="v">—</span> <span>' + m.pv_units + '</span></div>' +
         '<div class="lamp ok"><span class="dot"></span><span class="lt">SIS ARMED</span></div>' +
+        '<div class="chips" style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 2px"></div>' +
         '<div class="sp"></div></div>';
       strip.appendChild(tile);
       tiles[id] = {
@@ -800,6 +827,7 @@
         trip: tile.querySelector(".mark.trip"), sp: tile.querySelector(".mark.sp"),
         v: tile.querySelector(".v"), lamp: tile.querySelector(".lamp"),
         lt: tile.querySelector(".lt"), spn: tile.querySelector(".sp"),
+        chips: tile.querySelector(".chips"),
       };
       tiles[id].trip.style.bottom = (m.trip_frac * 100).toFixed(1) + "%";
       tiles[id].sp.style.bottom = (m.sp_frac * 100).toFixed(1) + "%";
@@ -814,7 +842,13 @@
     [[pAnchor, "<b>P-401</b> product storage", "#7fe0c0"],
      [fAnchor, "flare", "#ff9a3a"]].forEach(function (p) {
       var d = document.createElement("div"); d.className = "lab";
-      d.innerHTML = '<div class="t">' + p[1] + '</div>';
+      if (p[0] === pAnchor) {
+        d.innerHTML = '<div class="t"><b>P-401</b> product storage</div>' +
+                      '<div class="v">—</div><div class="s"></div>';
+        pLabel = { v: d.querySelector(".v"), s: d.querySelector(".s") };
+      } else {
+        d.innerHTML = '<div class="t">' + p[1] + '</div>';
+      }
       d.querySelector(".t").style.color = p[2];
       labels.appendChild(d); staticLabels.push({ anchor: p[0], el: d });
     });
@@ -859,6 +893,24 @@
     COUP.tank_reactor = st.couplings.tank_reactor.active;
     COUP.reactor_vessel = st.couplings.reactor_vessel.active;
 
+    // terminal valves + P-401 level come straight from the server state
+    if (st.units.tank && typeof st.units.tank.fill_open === "boolean")
+      feedOpen = st.units.tank.fill_open;
+    if (st.product) {
+      exportOpen = st.product.export_open;
+      pLevel = Math.max(0, Math.min(1, st.product.fraction));
+      if (pLabel) {
+        var pa = st.product.hh ? "HI-HI" : st.product.hi ? "HI"
+          : st.product.ll ? "LO-LO" : st.product.lo ? "LO" : "normal";
+        var pcol = (st.product.hh || st.product.ll) ? "#ff6a6a"
+          : (st.product.hi || st.product.lo) ? "#ffb020" : "#8aa0b5";
+        pLabel.v.textContent = st.product.pv.toFixed(2) + " " + st.product.pv_units +
+          (exportOpen ? "" : " · export shut");
+        pLabel.v.style.color = (st.product.hh || st.product.ll) ? "#ff6a6a" : "#cfe3ff";
+        pLabel.s.textContent = pa; pLabel.s.style.color = pcol;
+      }
+    }
+
     // attack chip + legend
     var tgt = st.target;
     chip.textContent = st.any_attacked
@@ -877,6 +929,7 @@
       T.lamp.className = "lamp " + (tripped ? "trip" : "ok");
       T.lt.textContent = tripped ? "SIS TRIPPED" : "SIS ARMED";
       T.tile.className = "tile" + (m.attacked ? " attacked" : "");
+      if (T.chips) T.chips.innerHTML = chipHtml(m);
       var spTamp = m.setpoint_tampered;
       T.spn.innerHTML = "SP <b style='color:" + (spTamp ? "#ff8b8b" : "#aeb9c6") + "'>" +
         m.setpoint_now.toFixed(d) + " " + u + "</b>" + (spTamp ? " ⚠ forced" : "");
@@ -908,8 +961,14 @@
   }
 
   btnAttack.onclick = function () {
+    // "leave SIS armed" checked => defense-in-depth (manual drive, no bypass);
+    // unchecked => full attack (manual drive + SIS bypass).
     fetch("/api/attack", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ unit: unitSel.value, setpoint_only: spOnly.checked }) });
+      body: JSON.stringify({ unit: unitSel.value, bypass: !spArmed.checked }) });
+  };
+  btnSisReset.onclick = function () {
+    fetch("/api/sisreset", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit: unitSel.value }) });
   };
   btnStand.onclick = function () {
     fetch("/api/standdown", { method: "POST", headers: { "Content-Type": "application/json" },
