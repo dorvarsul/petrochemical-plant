@@ -191,10 +191,11 @@ class SimRunner(threading.Thread):
                 self._warmup()              # re-seeds the safe setpoint
             try:
                 if self._attack:
-                    # Same two writes the external attacker (attack.py) makes:
-                    # manipulate the control setpoint AND defeat the SIS.
-                    self.bpcs.write_holding(R.BpcsHolding.SETPOINT,
-                                            self.scenario.attack_setpoint_reg)
+                    # Same writes the external attacker (attack.py) makes: seize
+                    # the actuator through BPCS MANUAL mode AND defeat the SIS.
+                    self.bpcs.write_coil(R.BpcsCoil.MAN_MODE, True)
+                    self.bpcs.write_holding(R.BpcsHolding.MAN_OUT,
+                                            self.scenario.attack_manual_out_reg)
                     self.sis.write_coil(R.SisCoil.OVERRIDE, True)
                     self._attack = False
                 s = self.bridge.step()

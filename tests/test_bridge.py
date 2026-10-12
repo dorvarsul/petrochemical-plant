@@ -5,12 +5,15 @@ or OpenPLC (TESTING.md sections 3 and 5):
 
   * baseline — the BPCS holds the PV at its safe setpoint; the SIS never trips
     and the process never fails, no matter how long it runs;
-  * setpoint attack alone — a malicious setpoint drives the process up, but a
-    healthy SIS trips and holds it safe (defense in depth works);
-  * full attack — malicious setpoint AND SIS_OVERRIDE: the process runs to
-    failure while the HMI stays frozen and "armed";
-  * override alone — with the setpoint untouched, defeating the SIS changes
-    nothing (the setpoint is the attack's driver).
+  * setpoint tamper alone — an off-scale setpoint is CLAMPED by the BPCS, so the
+    naive attack is neutralised: the process never fails (tank/vessel settle at
+    the clamp below the trip; the reactor's exotherm still trips its healthy SIS);
+  * manual drive, SIS armed — the attacker seizes the actuator through BPCS
+    MANUAL mode, but a healthy SIS trips and holds it safe (defense in depth);
+  * full attack — manual drive AND SIS_OVERRIDE: the process runs to failure
+    while the HMI stays frozen and "armed";
+  * override alone — with the actuator untouched, defeating the SIS changes
+    nothing (the actuator drive is the attack's driver).
 
 The live round-trip against real OpenPLC is tests/test_bridge_live.py.
 """
@@ -35,9 +38,16 @@ def make_bridge(sid):
     return b
 
 
+def manual_drive(b):
+    """Seize the actuator: flip the BPCS to MANUAL and drive the output to the
+    dangerous extreme (the evolved attack's driver), SIS left untouched."""
+    b.bpcs.write_coil(R.BpcsCoil.MAN_MODE, True)
+    b.bpcs.write_holding(R.BpcsHolding.MAN_OUT, b.scenario.attack_manual_out_reg)
+
+
 def attack(b):
-    """The external attack: malicious setpoint + SIS override, over Modbus."""
-    b.bpcs.write_holding(R.BpcsHolding.SETPOINT, b.scenario.attack_setpoint_reg)
+    """The full external attack: manual actuator drive + SIS override."""
+    manual_drive(b)
     b.sis.write_coil(R.SisCoil.OVERRIDE, True)
 
 
@@ -92,16 +102,57 @@ class TestBaselineHoldsSetpoint(unittest.TestCase):
                     self.assertLess(s.divergence, 0.02 * b.scenario.fail_at)
 
 
-class TestSetpointAttackCaughtBySis(unittest.TestCase):
-    """Setpoint manipulation alone: a healthy SIS trips and holds it safe."""
+class TestSetpointClampNeutralizesNaiveAttack(unittest.TestCase):
+    """An off-scale setpoint is clamped by the BPCS, so the naive attack never
+    fails the process: tank/vessel settle at the clamp below the trip; the
+    reactor's exotherm is caught by its healthy SIS instead."""
+
+    def test_clamp_holds_or_sis_catches_but_never_fails(self):
+        for sid in ALL:
+            with self.subTest(sid=sid):
+                b = make_bridge(sid)
+                sc = b.scenario
+                # Attacker tampers ONLY the setpoint (no manual drive, no override).
+                b.bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
+                tripped_seen = False
+                max_pv = 0.0
+                s = None
+                for _ in range(8000):
+                    s = b.step()
+                    tripped_seen = tripped_seen or s.trip_cmd
+                    max_pv = max(max_pv, s.true_pv)
+                    if b.model.failed:
+                        break
+                # The invariant across all three: a setpoint tamper never fails.
+                self.assertFalse(b.model.failed,
+                                 f"{sid}: setpoint tamper reached failure")
+                # The BPCS annunciated that it clamped the out-of-range setpoint.
+                self.assertTrue(b.bpcs.read_coil(R.BpcsCoil.SP_CLAMPED),
+                                f"{sid}: SP_CLAMPED not annunciated")
+                # The HMI is truthful (no override): it tracks the true PV.
+                self.assertLess(s.divergence, 0.05 * sc.fail_at,
+                                f"{sid}: HMI diverged without an override")
+                if sid in ("tank", "vessel"):
+                    # The clamp alone holds these below the trip — no trip at all.
+                    self.assertFalse(tripped_seen,
+                                     f"{sid}: clamp should hold below the trip")
+                    self.assertLessEqual(max_pv, sc.sp_hi + 0.05 * sc.fail_at,
+                                         f"{sid}: settled above the clamp")
+                else:
+                    # The reactor still reaches its trip; the healthy SIS catches it.
+                    self.assertTrue(tripped_seen,
+                                    f"{sid}: reactor SIS should have tripped")
+
+
+class TestManualDriveCaughtBySis(unittest.TestCase):
+    """The evolved driver (BPCS MANUAL) with the SIS left armed: defense in
+    depth — a healthy SIS trips and holds the process safe."""
 
     def test_sis_trips_and_process_never_fails(self):
         for sid in ALL:
             with self.subTest(sid=sid):
                 b = make_bridge(sid)
-                # Attacker moves the setpoint but does NOT defeat the SIS.
-                b.bpcs.write_holding(R.BpcsHolding.SETPOINT,
-                                     b.scenario.attack_setpoint_reg)
+                manual_drive(b)  # SIS NOT defeated
                 tripped_seen = False
                 max_pv = 0.0
                 for _ in range(8000):

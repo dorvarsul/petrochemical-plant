@@ -64,7 +64,7 @@ def main():
     print(f"PetroTwin LIVE divergence demo — {sc.title} [{sc.unit_tag}] "
           "(real OpenPLC over Modbus)")
     print(f"BPCS holds setpoint {sc.setpoint} {sc.pv_units}; SIS trip at "
-          f"{sc.trip_hh} {sc.pv_units}; attack (malicious setpoint + "
+          f"{sc.trip_hh} {sc.pv_units}; attack (BPCS MANUAL drive + "
           f"SIS_OVERRIDE) injected at t={ATTACK_AT:.0f} s\n")
 
     attacked = False
@@ -74,15 +74,16 @@ def main():
     try:
         for _ in range(400):
             if not attacked and b.model.time >= ATTACK_AT:
-                # The attack, over Modbus: malicious setpoint + safety defeat.
-                b.bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
+                # The attack, over Modbus: seize the actuator (BPCS MANUAL) +
+                # safety defeat.
+                b.bpcs.write_coil(R.BpcsCoil.MAN_MODE, True)
+                b.bpcs.write_holding(R.BpcsHolding.MAN_OUT, sc.attack_manual_out_reg)
                 b.sis.write_coil(R.SisCoil.OVERRIDE, True)
                 attacked = True
                 frozen = b.hmi_pv()
-                atk_sp = sc.reg_to_pv(sc.attack_setpoint_reg)
-                print(f">>> ATTACK: BPCS setpoint forced to {atk_sp:g} "
-                      f"{sc.pv_units} + SIS_OVERRIDE set — HMI frozen at "
-                      f"{frozen:.3f} {sc.pv_units}\n")
+                print(f">>> ATTACK: BPCS forced to MANUAL, {sc.actuator} driven "
+                      f"to {sc.attack_manual_out_reg/10:g}% + SIS_OVERRIDE set — "
+                      f"HMI frozen at {frozen:.3f} {sc.pv_units}\n")
             s = b.step()
             time.sleep(SETTLE)
             if s.time - last_print >= 10.0 - 1e-9 or b.model.failed:

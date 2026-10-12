@@ -59,16 +59,16 @@ def main() -> None:
     s = None
     for _ in range(40000):
         if not attacked and b.model.time >= ATTACK_AT:
-            # The external attack, over Modbus: manipulate the control setpoint
-            # AND defeat the safety layer.
-            b.bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
+            # The external attack, over Modbus: seize the actuator through BPCS
+            # MANUAL mode AND defeat the safety layer.
+            b.bpcs.write_coil(R.BpcsCoil.MAN_MODE, True)
+            b.bpcs.write_holding(R.BpcsHolding.MAN_OUT, sc.attack_manual_out_reg)
             b.sis.write_coil(R.SisCoil.OVERRIDE, True)
             attacked = True
             frozen_hmi = b.hmi_pv()
-            atk_sp = sc.reg_to_pv(sc.attack_setpoint_reg)
-            print(f">>> ATTACK: BPCS setpoint forced to {atk_sp:g} {sc.pv_units} "
-                  f"(safe {sc.setpoint:g}) + SIS_OVERRIDE set — HMI now frozen at "
-                  f"{frozen_hmi:.3f} {sc.pv_units}, trip suppressed\n")
+            print(f">>> ATTACK: BPCS forced to MANUAL, {sc.actuator} driven to "
+                  f"{sc.attack_manual_out_reg/10:g}% + SIS_OVERRIDE set — HMI now "
+                  f"frozen at {frozen_hmi:.3f} {sc.pv_units}, trip suppressed\n")
 
         s = b.step()
         if s.time - last_print >= 10.0 - 1e-9 or b.model.failed:

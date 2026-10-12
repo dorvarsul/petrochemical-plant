@@ -9,7 +9,7 @@ vessel — running at once on fake PLCs (one BPCS + one SIS per unit), through t
   * attacking ONE unit drives THAT unit past its failure threshold while its HMI
     stays frozen/armed, and the up/downstream units respond plausibly (forward
     coupling) without failing;
-  * the healthy-SIS contrast (setpoint-only) holds the targeted unit safe;
+  * the healthy-SIS contrast (manual drive, SIS armed) holds the targeted unit safe;
   * the coupling is forward only (tank->reactor->vessel): an attack on a
     downstream unit leaves its upstream neighbours undisturbed, and an upstream
     attack visibly moves its downstream neighbour.
@@ -33,12 +33,14 @@ DT = 0.1
 ATTACK_AT = 10.0
 
 
-def run_plant(attack_unit=None, setpoint_only=False, t_end=400.0,
+def run_plant(attack_unit=None, bypass=True, t_end=400.0,
               t_attack=ATTACK_AT, dt=DT):
     """Run the connected plant; optionally attack one unit at ``t_attack``.
 
-    Returns ``(bridge, last_sample, frozen_hmi)`` where ``frozen_hmi`` is the
-    attacked unit's HMI PV captured at the moment of attack (None if no attack).
+    ``bypass`` selects the full attack (manual drive + SIS_OVERRIDE) vs. the
+    defence-in-depth contrast (manual drive, SIS left armed). Returns
+    ``(bridge, last_sample, frozen_hmi)`` where ``frozen_hmi`` is the attacked
+    unit's HMI PV captured at the moment of attack (None if no attack).
     """
     b = make_fake_plant_bridge(dt=dt)
     attacked = False
@@ -47,7 +49,7 @@ def run_plant(attack_unit=None, setpoint_only=False, t_end=400.0,
     for _ in range(int(t_end / dt)):
         if attack_unit and not attacked and b.plant.time >= t_attack:
             frozen = b.hmi_pv(attack_unit)
-            b.attack(attack_unit, setpoint_only=setpoint_only)
+            b.attack(attack_unit, bypass=bypass)
             attacked = True
         s = b.step()
     return b, s, frozen
@@ -150,12 +152,12 @@ class TestPerUnitAttack(unittest.TestCase):
 
 
 class TestHealthySisContrast(unittest.TestCase):
-    """Setpoint-only (SIS left healthy) -> the targeted unit is held safe."""
+    """Manual drive with the SIS left healthy -> the targeted unit is held safe."""
 
-    def test_setpoint_only_is_caught(self):
+    def test_manual_drive_is_caught(self):
         for unit in UNITS:
             with self.subTest(unit=unit):
-                b, s, _ = run_plant(attack_unit=unit, setpoint_only=True,
+                b, s, _ = run_plant(attack_unit=unit, bypass=False,
                                     t_end=400.0)
                 tgt = s.units[unit]
                 self.assertFalse(tgt.failed,

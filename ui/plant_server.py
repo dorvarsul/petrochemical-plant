@@ -58,7 +58,7 @@ class PlantRunner(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self._lock = threading.Lock()
-        self._pending = []          # queued (verb, unit, setpoint_only) requests
+        self._pending = []          # queued (verb, unit, bypass) requests
         self._reset = False
         self._stop = False
         self.bridge = make_fake_plant_bridge(dt=DT)
@@ -71,11 +71,11 @@ class PlantRunner(threading.Thread):
         self._snap = self._build_snapshot(status="running")
 
     # --- control surface (called from HTTP handlers) ----------------------
-    def request_attack(self, unit, setpoint_only=False):
+    def request_attack(self, unit, bypass=True):
         if unit not in FLOW:
             return False
         with self._lock:
-            self._pending.append(("attack", unit, bool(setpoint_only)))
+            self._pending.append(("attack", unit, bool(bypass)))
         return True
 
     def request_standdown(self, unit):
@@ -154,11 +154,11 @@ class PlantRunner(threading.Thread):
     def _apply_pending(self):
         with self._lock:
             pending, self._pending = self._pending, []
-        for verb, unit, setpoint_only in pending:
+        for verb, unit, bypass in pending:
             if verb == "attack":
                 # Capture the HMI value the operator will be frozen at, then inject.
                 self._frozen[unit] = round(self.bridge.hmi_pv(unit), 3)
-                self.bridge.attack(unit, setpoint_only=setpoint_only)
+                self.bridge.attack(unit, bypass=bypass)
                 self._target = unit
             elif verb == "standdown":
                 self.bridge.stand_down(unit)
@@ -221,8 +221,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.startswith("/api/attack"):
             body = self._json_body()
-            ok = RUNNER.request_attack(body.get("unit", ""),
-                                       body.get("setpoint_only", False))
+            # Accept the new `bypass` flag; fall back to the legacy
+            # `setpoint_only` checkbox (checked == leave SIS armed).
+            bypass = bool(body.get("bypass", not body.get("setpoint_only", False)))
+            ok = RUNNER.request_attack(body.get("unit", ""), bypass)
             self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
         elif self.path.startswith("/api/standdown"):
             ok = RUNNER.request_standdown(self._json_body().get("unit", ""))

@@ -134,24 +134,30 @@ class PlantBridge:
                            p_coupling=self.plant.p_coupling)
 
     # --- attack surface (external, over Modbus — per unit) ------------------
-    def attack(self, unit_id: str, setpoint_only: bool = False) -> None:
-        """Inject the attack on ONE unit, leaving the others healthy.
+    def attack(self, unit_id: str, bypass: bool = True) -> None:
+        """Inject the evolved attack on ONE unit, leaving the others healthy.
 
-        Writes that unit's BPCS setpoint off-scale (the driver) and — unless
-        ``setpoint_only`` — sets its SIS_OVERRIDE (defeat the trip + freeze its
-        HMI). ``setpoint_only`` is the defence-in-depth contrast: a healthy SIS
-        should trip and hold the targeted unit safe.
+        Flips that unit's BPCS to MANUAL and drives the actuator to its
+        dangerous extreme (``attack_manual_out_reg`` — valve wide open / coolant
+        shut), which bypasses the control law and the setpoint clamp. When
+        ``bypass`` (the full attack) it also sets SIS_OVERRIDE to suppress the
+        trip and freeze the HMI; with ``bypass=False`` the SIS is left armed —
+        the defence-in-depth contrast, where a healthy SIS trips and holds the
+        targeted unit safe despite the manual drive.
         """
         m = self.plant.unit(unit_id)
         bpcs, sis = self.controllers[unit_id]
-        bpcs.write_holding(R.BpcsHolding.SETPOINT, m.scenario.attack_setpoint_reg)
-        if not setpoint_only:
+        bpcs.write_coil(R.BpcsCoil.MAN_MODE, True)
+        bpcs.write_holding(R.BpcsHolding.MAN_OUT, m.scenario.attack_manual_out_reg)
+        if bypass:
             sis.write_coil(R.SisCoil.OVERRIDE, True)
 
     def stand_down(self, unit_id: str) -> None:
-        """Undo :meth:`attack` on one unit (restore safe setpoint, clear override)."""
+        """Undo :meth:`attack` on one unit: back to AUTO at the safe setpoint,
+        clear the bypass. Does NOT clear a latched SIS trip (use the SIS reset)."""
         m = self.plant.unit(unit_id)
         bpcs, sis = self.controllers[unit_id]
+        bpcs.write_coil(R.BpcsCoil.MAN_MODE, False)
         bpcs.write_holding(R.BpcsHolding.SETPOINT, m.scenario.setpoint_reg)
         sis.write_coil(R.SisCoil.OVERRIDE, False)
 

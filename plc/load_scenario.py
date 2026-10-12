@@ -39,6 +39,11 @@ _BPCS_CONSTS = (("BIAS_PM", "ctrl_bias_pm"),
                 ("KP_NUM", "ctrl_kp_num"),
                 ("KP_DEN", "ctrl_kp_den"))
 
+# The BPCS operator-setpoint clamp bounds, in the form `NAME : INT := <n>;`
+# (register units; RATE_LIM is intentionally NOT substituted — it is fixed).
+_BPCS_INT_CONSTS = (("SP_LO", "sp_lo_reg"),
+                    ("SP_HI", "sp_hi_reg"))
+
 
 def sis_program_for(scenario_id: str) -> str:
     """The SIS ST program for a scenario: the template with TRIP_HH substituted."""
@@ -64,6 +69,13 @@ def bpcs_program_for(scenario_id: str) -> str:
             raise SystemExit(
                 f"could not find the '{const} : DINT := <n>;' line in "
                 f"{BPCS_ST} to substitute the scenario control constant")
+    for const, attr in _BPCS_INT_CONSTS:
+        pat = re.compile(rf"({const}\s*:\s*INT\s*:=\s*)-?\d+(\s*;)")
+        text, n = pat.subn(rf"\g<1>{getattr(sc, attr)}\g<2>", text, count=1)
+        if n != 1:
+            raise SystemExit(
+                f"could not find the '{const} : INT := <n>;' line in "
+                f"{BPCS_ST} to substitute the scenario setpoint-clamp bound")
     return text
 
 

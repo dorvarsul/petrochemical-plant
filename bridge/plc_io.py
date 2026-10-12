@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from common import registers as R
+from common import scenarios
 
 
 class PlcClient(Protocol):
@@ -49,27 +50,42 @@ def _idiv(a: int, b: int) -> int:
 class FakeBpcs:
     """In-memory Control PLC — mirrors plc/bpcs/bpcs.st (setpoint control).
 
-    Runs the same proportional law as the ST program, using the scenario's
-    control constants (``ctrl_bias_pm`` / ``ctrl_kp_num`` / ``ctrl_kp_den``),
-    the same single source of truth the loader substitutes into the real PLC:
+    Byte-for-byte logical twin of the ST program, using the scenario's control
+    constants (``ctrl_bias_pm`` / ``ctrl_kp_num`` / ``ctrl_kp_den``) and the
+    operator setpoint clamp (``sp_lo_reg`` / ``sp_hi_reg``) — the same single
+    source of truth the loader substitutes into the real PLC. It implements:
 
-        feed_cmd = clamp(bias_pm + kp_num*(SP - PV)//kp_den, 0, 1000)
+      * operator SETPOINT clamp to [sp_lo, sp_hi] (+ SP_CLAMPED annunciation),
+      * AUTO / MANUAL mode (MAN_MODE) with bumpless transfer (AUTO tracks the
+        live output into MAN_OUT), the evolved attack's new driver,
+      * the proportional law in AUTO:
+            target = clamp(bias_pm + kp_num*(sp_use - PV)//kp_den, 0, 1000)
+      * an output RATE LIMIT (``scenarios.CTRL_RATE_LIM_PM`` per scan),
+      * PV_HI / PV_LO process alarms and the export-valve passthrough.
 
-    The SETPOINT register is master-writable (the bridge seeds the safe value;
-    the attack overwrites it), exactly like the real %MW1 word.
+    SETPOINT / MAN_OUT are master-writable %MW words; MAN_MODE / OPV_CMD are
+    program-read coils the master writes — exactly like the real registers.
     """
 
     def __init__(self, scenario) -> None:
         self.scenario = scenario
         self._holding = {int(R.BpcsHolding.PV): 0,
                          int(R.BpcsHolding.SETPOINT): 0,
+                         int(R.BpcsHolding.MAN_OUT): 0,
                          int(R.BpcsHolding.FEED_CMD): 0}
+        self._coil = {int(R.BpcsCoil.MAN_MODE): False,
+                      int(R.BpcsCoil.PV_HI_ALARM): False,
+                      int(R.BpcsCoil.PV_LO_ALARM): False,
+                      int(R.BpcsCoil.SP_CLAMPED): False,
+                      int(R.BpcsCoil.OPV_CMD): False,
+                      int(R.BpcsCoil.OPV_OUT): False}
+        self._out_prev = 0  # retained rate-limited output (ST VAR out_prev)
 
     def read_coil(self, addr: int) -> bool:
-        raise KeyError(f"BPCS has no coils (addr {addr})")
+        return self._coil[int(addr)]
 
     def write_coil(self, addr: int, value: bool) -> None:
-        raise KeyError(f"BPCS has no coils (addr {addr})")
+        self._coil[int(addr)] = bool(value)
 
     def read_holding(self, addr: int) -> int:
         return self._holding[int(addr)]
@@ -79,11 +95,42 @@ class FakeBpcs:
 
     def scan(self) -> None:
         sc = self.scenario
-        pv = self._holding[int(R.BpcsHolding.PV)]
-        sp = self._holding[int(R.BpcsHolding.SETPOINT)]
-        raw = sc.ctrl_bias_pm + _idiv(sc.ctrl_kp_num * (sp - pv), sc.ctrl_kp_den)
-        raw = 0 if raw < 0 else R.VALVE_REG_MAX if raw > R.VALVE_REG_MAX else raw
-        self._holding[int(R.BpcsHolding.FEED_CMD)] = raw
+        H, C = self._holding, self._coil
+        pv = H[int(R.BpcsHolding.PV)]
+        sp = H[int(R.BpcsHolding.SETPOINT)]
+        man_out = H[int(R.BpcsHolding.MAN_OUT)]
+        man = C[int(R.BpcsCoil.MAN_MODE)]
+        lo, hi = sc.sp_lo_reg, sc.sp_hi_reg
+
+        # 1. operator setpoint clamp
+        sp_use = hi if sp > hi else lo if sp < lo else sp
+        C[int(R.BpcsCoil.SP_CLAMPED)] = sp_use != sp
+
+        # 2. desired output: operator's hand in MANUAL, P-loop in AUTO
+        if man:
+            target = man_out
+        else:
+            target = sc.ctrl_bias_pm + _idiv(
+                sc.ctrl_kp_num * (sp_use - pv), sc.ctrl_kp_den)
+        target = 0 if target < 0 else R.VALVE_REG_MAX if target > R.VALVE_REG_MAX else target
+
+        # 3. bumpless transfer: track the live output into MAN_OUT while in AUTO
+        if not man:
+            H[int(R.BpcsHolding.MAN_OUT)] = target
+
+        # 4. output rate limit
+        rate = scenarios.CTRL_RATE_LIM_PM
+        delta = target - self._out_prev
+        delta = rate if delta > rate else -rate if delta < -rate else delta
+        out = self._out_prev + delta
+        out = 0 if out < 0 else R.VALVE_REG_MAX if out > R.VALVE_REG_MAX else out
+        self._out_prev = out
+        H[int(R.BpcsHolding.FEED_CMD)] = out
+
+        # 5. process alarms + export-valve passthrough
+        C[int(R.BpcsCoil.PV_HI_ALARM)] = pv >= hi
+        C[int(R.BpcsCoil.PV_LO_ALARM)] = pv <= lo
+        C[int(R.BpcsCoil.OPV_OUT)] = C[int(R.BpcsCoil.OPV_CMD)]
 
     def close(self) -> None:
         pass

@@ -65,9 +65,8 @@ def main() -> None:
             frozen = b.hmi_pv(target)
             b.attack(target)
             attacked = True
-            atk_sp = tgt_sc.reg_to_pv(tgt_sc.attack_setpoint_reg)
-            print(f">>> ATTACK on {target}: BPCS setpoint -> {atk_sp:g} "
-                  f"{tgt_sc.pv_units} (safe {tgt_sc.setpoint:g}) + SIS_OVERRIDE; "
+            print(f">>> ATTACK on {target}: BPCS forced to MANUAL, {tgt_sc.actuator} "
+                  f"-> {tgt_sc.attack_manual_out_reg/10:g}% + SIS_OVERRIDE; "
                   f"HMI frozen at {frozen:.2f} {tgt_sc.pv_units}\n")
 
         s = b.step()
