@@ -51,7 +51,12 @@ control, one SIS for all three units' safety — via per-unit OFFSET register bl
 (`registers.unit_addr`, applied by `bridge/plc_io.py` `ModbusUnitView`) and one
 GENERATED 3-instance ST program per slave (`plc/load_scenario.py` `load_plant`);
 no extra containers, single-unit map stays canonical (unit 0 = tank). Proven by
-`tests/test_plant_live.py`. Phase 2 is DONE; OpenModelica is the FINAL phase.
+`tests/test_plant_live.py`. Phase 2 is DONE. Next up (Phase 2.5, planned) is a
+DEPLOYMENT-only split onto FOUR Ubuntu Linux PCs on one L2 Ethernet segment —
+PC1 physics+3D, PC2 control PLC, PC3 safety PLC, PC4 HMI; `localhost:5020/5021`
+becomes Modbus TCP to real host IPs, physics+3D stay co-located so the direct
+tap stays a local (unspoofable) read, layers/register-map/attack unchanged, still
+Modbus-only. OpenModelica is the FINAL phase.
 `run_plant.sh start|stop` is the one-command runner (containers up + serve + open
 tab; fake fallback if no Docker).
 - Tank overfill → high-level trip (single ODE: level; the anchor)
