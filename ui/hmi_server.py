@@ -54,9 +54,10 @@ from physics.plant import FLOW
 from physics.product import ProductTankModel
 
 STATIC = Path(__file__).parent / "static"
-DT, SETTLE = 1.0, 0.25   # sim-seconds per poll / real seconds between polls
-# (slower than plant_server's 0.12s: this process only polls Modbus, it is
-# not pacing a physics integrator.)
+DT, SETTLE = 1.0, 0.12   # sim-seconds per poll / real seconds between polls
+# (matches plant_server's cadence; this process has no physics to pace, so
+# there's no reason to poll any slower — valve/attack clicks feel sluggish
+# otherwise. DT only paces the local P-401 replica's clock, see below.)
 
 
 class HmiRunner(threading.Thread):

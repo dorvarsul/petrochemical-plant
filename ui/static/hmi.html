@@ -155,6 +155,27 @@
 
   // --- build the mimic once -------------------------------------------------
   var ui = {}, built = false;
+  // Valve clicks are optimistic: the bridge/HMI backend only applies a valve
+  // write on its next poll cycle (~0.1-0.3s) and the page itself only polls
+  // every 200ms, so waiting for the server to confirm before repainting made
+  // toggling feel unresponsive — and, worse, a second click inside that
+  // window read the still-stale rendered class and resent the SAME direction
+  // instead of flipping back (classic double-click race). `pendingValve[key]`
+  // tracks the user's last requested state so the click handler always
+  // toggles off what's ON SCREEN, repainted immediately; it expires after
+  // PENDING_MS so a request the server never actually honours (e.g. the FILL
+  // valve while its SIS is tripped — BLK_OUT = BLK_OPEN_CMD AND NOT TRIP_CMD,
+  // see ARCHITECTURE.md) snaps back to the true, server-reported state
+  // instead of showing a permanently wrong optimistic one.
+  var pendingValve = {};
+  var PENDING_MS = 1500;
+  function displayOpen(key, trueOpen) {
+    var p = pendingValve[key];
+    if (!p) return trueOpen;
+    if (Date.now() < p.until && p.open !== trueOpen) return p.open;  // still in flight
+    delete pendingValve[key];  // confirmed (or timed out) — trust the server again
+    return trueOpen;
+  }
   function conn(key, label, hasBtn) {
     return '<div class="conn"><div class="pipe" data-pipe="' + key + '"></div>' +
       (label ? '<div class="valve" data-valve="' + key + '"><div class="bowtie"><i class="l"></i><i class="r"></i></div>' +
@@ -216,9 +237,14 @@
     el("train").querySelectorAll("[data-vbtn]").forEach(function (b) {
       b.onclick = function () {
         var key = b.dataset.vbtn;  // "fill" or "export"
-        var open = ui.valves[key].classList.contains("shut");  // toggle to open if currently shut
+        // Toggle off what's ON SCREEN right now (which already reflects any
+        // not-yet-confirmed click), not off the last server snapshot — so
+        // rapid clicks always flip, never resend the same stale direction.
+        var open = !ui.valves[key].classList.contains("open");
+        pendingValve[key] = { open: open, until: Date.now() + PENDING_MS };
+        setValve(key, open, open ? "…" : "SHUT");  // repaint immediately, don't wait for a poll
         fetch("/api/valve", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ valve: key, open: open }) });
+          body: JSON.stringify({ valve: key, open: open }) }).catch(function () {});
       };
     });
     built = true;
@@ -283,7 +309,8 @@
     if (ui.pipes.bottoms) ui.pipes.bottoms.className = "pipe flow";
 
     // INFLOW/FILL valve: tank SIS block-valve final element
-    var fillOpen = (typeof st.units.tank.fill_open === "boolean") ? st.units.tank.fill_open : true;
+    var fillOpenTrue = (typeof st.units.tank.fill_open === "boolean") ? st.units.tank.fill_open : true;
+    var fillOpen = displayOpen("fill", fillOpenTrue);
     setValve("fill", fillOpen, fillOpen ? (st.units.tank.feed * 100).toFixed(0) + "% OPEN" : "SHUT");
 
     // FLARE/relief: lit when the vessel's SIS (as the operator sees it) is tripping relief
@@ -301,7 +328,8 @@
     var plamp = el("train").querySelector("[data-plamp]"), plt = el("train").querySelector("[data-plt]");
     if (plt) { plt.textContent = p.hh ? "HI-HI" : p.hi ? "HI" : p.ll ? "LO-LO" : p.lo ? "LO" : "normal";
       plamp.className = "lamp " + ((p.hh || p.ll) ? "trip" : "ok"); }
-    var expOpen = (typeof p.export_open === "boolean") ? p.export_open : true;
+    var expOpenTrue = (typeof p.export_open === "boolean") ? p.export_open : true;
+    var expOpen = displayOpen("export", expOpenTrue);
     setValve("export", expOpen, expOpen ? "OPEN" : "SHUT");
 
     el("note").innerHTML = st.any_attacked
