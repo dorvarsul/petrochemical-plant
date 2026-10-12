@@ -282,7 +282,7 @@
     var floor = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.06, 48), M.dark());
     floor.position.y = yBot; g.add(floor);
 
-    var liqMat = std(0x4f3a22, 0.2, 0.45, { transparent: true, opacity: 0.95, emissive: 0x241a0e });  // crude oil (dark, with sheen)
+    var liqMat = std(0x4f3a22, 0.2, 0.45, { transparent: true, opacity: 0.76, emissive: 0x241a0e });  // crude oil (dark, with sheen) — translucent so the fill reads as liquid
     var liquid = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.06, R - 0.06, H, 48), liqMat);
     g.add(liquid);
 
@@ -324,6 +324,35 @@
     return new THREE.Mesh(new THREE.LatheGeometry(pts, 48), mat);
   }
 
+  // ---- rippling liquid surface (a glassy, gently moving liquid/vapour interface) ----
+  // Returns a flat horizontal disc whose vertices are displaced by layered sine
+  // waves each frame via mesh.ripple(dt, amp, swirl) — sells a real liquid level
+  // seen through the translucent shell. Cheap (recomputes normals on ~40 verts).
+  function liquidSurface(radius, color, opts) {
+    opts = opts || {};
+    var geo = new THREE.CircleGeometry(radius, opts.seg || 44);
+    geo.rotateX(-Math.PI / 2);                               // lie flat, normal +Y
+    var base = geo.attributes.position.array.slice(0);       // rest positions
+    var mat = std(color, opts.metal == null ? 0.55 : opts.metal,
+      opts.rough == null ? 0.12 : opts.rough,
+      { transparent: true, opacity: opts.opacity == null ? 0.96 : opts.opacity,
+        emissive: opts.emissive == null ? 0x000000 : opts.emissive, emissiveIntensity: 0.0,
+        side: THREE.DoubleSide });
+    var mesh = new THREE.Mesh(geo, mat), tt = 0, spd = opts.speed || 1.0;
+    mesh.ripple = function (dt, amp, swirl) {
+      tt += dt * spd;
+      var p = geo.attributes.position.array;
+      for (var i = 0; i < p.length; i += 3) {
+        var x = base[i], z = base[i + 2], r = Math.sqrt(x * x + z * z), a = Math.atan2(z, x);
+        var w = Math.sin(r * 6.0 - tt * 3.0) * 0.5 + Math.sin(a * 3.0 + r * 4.0 + tt * 2.0) * 0.5;
+        p[i + 1] = base[i + 1] + w * amp + Math.sin(a * (swirl || 0) + tt * 4.0) * amp * 0.5;
+      }
+      geo.attributes.position.needsUpdate = true;
+      geo.computeVertexNormals();
+    };
+    return mesh;
+  }
+
   function buildVessel() {
     var g = new THREE.Group();
     var R = 0.8, cyl = 4.2, headR = 0.55;   // tall vertical separation column
@@ -336,12 +365,16 @@
     // Steady liquid inventory in the bottom; vapour space above. Overhead vapour
     // + PSV relief go to the flare; the liquid bottoms go to product storage.
     var poolTop = -0.05, poolBot = -cyl / 2 - headR * 0.6, ph = poolTop - poolBot;
+    // settled hydrocarbon condensate: deep, glossy, with a faint internal glow
     var pool = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.05, R - 0.05, ph, 40),
-      std(0x2f7fe0, 0.1, 0.25, { transparent: true, opacity: 0.88 }));
+      std(0x5c3d18, 0.35, 0.2, { transparent: true, opacity: 0.94, emissive: 0x160d04, emissiveIntensity: 0.3 }));
     pool.position.y = poolBot + ph / 2; g.add(pool);
-    var surface = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.05, R - 0.05, 0.02, 40),
-      std(0x7fb4ff, 0.1, 0.2, { transparent: true, opacity: 0.95 }));
-    surface.position.y = poolTop; g.add(surface);
+    // glassy, gently rippling liquid/vapour interface + wetted meniscus at the wall
+    var vSurf = liquidSurface(R - 0.05, 0x9c6a2a, { opacity: 0.97, speed: 0.6, emissive: 0x3a2609 });
+    vSurf.position.y = poolTop; g.add(vSurf);
+    var vMen = new THREE.Mesh(new THREE.TorusGeometry(R - 0.05, 0.02, 8, 40),
+      std(0xc79a4e, 0.4, 0.25, { transparent: true, opacity: 0.7 }));
+    vMen.rotation.x = Math.PI / 2; vMen.position.y = poolTop; g.add(vMen);
     // demister / mesh pad just below the vapour outlet
     var demister = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.12, R - 0.12, 0.16, 32),
       std(0x9aa6b4, 0.4, 0.85, { transparent: true, opacity: 0.5 }));
@@ -353,7 +386,7 @@
     g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.3, 12),
       std(0xbcd0e6, 0.1, 0.2, { transparent: true, opacity: 0.3 })).translateY(-0.3).translateZ(R + 0.02));
     g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.72, 12),
-      std(0x2f7fe0, 0.1, 0.2, { transparent: true, opacity: 0.9 })).translateY(-0.59).translateZ(R + 0.02));
+      std(0x9c6a2a, 0.3, 0.2, { transparent: true, opacity: 0.9 })).translateY(-0.59).translateZ(R + 0.02));
 
     var skirt = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.8, R * 0.9, 0.9, 32, 1, true), M.dark());
     skirt.position.y = -cyl / 2 - headR - 0.45; g.add(skirt);
@@ -408,6 +441,7 @@
       bodyMat.opacity = c.failed ? 0.6 : 0.4;
       bodyMat.emissive.copy(c.failed ? new THREE.Color(0x551010) : new THREE.Color(0x000000));
       nHub.rotation.x = (-0.75 + 1.5 * Math.min(1, c.frac)) * Math.PI;
+      vSurf.ripple(c.dt, 0.012 + (c.overTrip ? 0.025 : 0), 2);   // calmer when steady, sloshes near trip
       fv.setFrac(c.feed); vent.active = c.sisActive;
       if (c.failed && !ruptured) { ruptured = true; burst.burst(); }
       if (!c.failed) ruptured = false;
@@ -419,7 +453,7 @@
     var g = new THREE.Group();
     var R = 1.0, cyl = 1.7, headR = 0.7;
     g.add(latheVessel(R, cyl, headR, M.glass()));
-    var liqMat = std(0x3a7bff, 0.1, 0.3, { transparent: true, opacity: 0.92 });
+    var liqMat = std(0x2f6bff, 0.22, 0.22, { transparent: true, opacity: 0.72 });
     var liquid = latheVessel(R - 0.05, cyl, headR - 0.05, liqMat); g.add(liquid);
     var jMat = std(0x27c0e0, 0.2, 0.25, { transparent: true, opacity: 0.22, side: THREE.DoubleSide });
     var jacket = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.22, R + 0.22, cyl + 0.3, 48, 1, true), jMat);
@@ -463,6 +497,8 @@
     var coolFlow = new Emitter(g, { origin: V(R + 1.1, cyl / 2, 0), dir: V(0.3, 1, 0), speed: 1.4, spread: 0.1, jitter: 0.3, gravity: 0.0, color: 0x6fe0f5, size: 0.09, life: 0.8, count: 120, rate: 90 });
     var vapor = new Emitter(g, { origin: V(0, topY + 0.3, 0), dir: V(0, 1, 0), speed: 2.0, spread: R, jitter: 0.8, gravity: 0.15, color: 0xff8a4a, size: 0.16, life: 1.3, count: 200, rate: 160 });
     var burst = new Emitter(g, { origin: V(0, 0, 0), dir: V(0, 0.5, 0), speed: 4.2, spread: R, jitter: 3.0, gravity: -1.8, color: 0xff5a2a, size: 0.17, life: 1.5, count: 240, rate: 0 });
+    // reaction bubbles rising through the liquid — simmer at baseline, boil as it heats
+    var bubbles = new Emitter(g, { origin: V(0, -cyl / 2 + 0.1, 0), dir: V(0, 1, 0), speed: 0.7, spread: R * 1.25, jitter: 0.22, gravity: 1.1, color: 0xbfe0ff, size: 0.05, life: 1.1, count: 100, rate: 0, opacity: 0.55 });
     var ruptured = false;
 
     return { group: g, update: function (c) {
@@ -470,6 +506,8 @@
       var t = Math.min(1, c.frac);
       var col = t < 0.5 ? lerpColor(0x3a7bff, 0xffb020, t / 0.5) : lerpColor(0xffb020, 0xff2a2a, (t - 0.5) / 0.5);
       liqMat.color.copy(col); liqMat.emissive.copy(col); liqMat.emissiveIntensity = Math.max(0, (t - 0.35)) * 1.3;
+      bubbles.active = !c.failed; bubbles.rate = 8 + 130 * t;
+      bubbles.mat.color.copy(lerpColor(0xbfe0ff, 0xffe0b0, t));
       var coolPos = c.feed;
       jMat.opacity = 0.08 + 0.26 * coolPos; jMat.color.copy(lerpColor(0x244a52, 0x37d6f0, coolPos));
       cv.setFrac(coolPos);
@@ -478,7 +516,7 @@
       vapor.active = (c.overTrip && !c.failed) || c.failed;
       if (c.failed && !ruptured) { ruptured = true; burst.burst(); }
       if (!c.failed) ruptured = false;
-      charge.update(c.dt); coolFlow.update(c.dt); vapor.update(c.dt); burst.update(c.dt);
+      charge.update(c.dt); coolFlow.update(c.dt); vapor.update(c.dt); burst.update(c.dt); bubbles.update(c.dt);
     } };
   }
 
@@ -533,14 +571,36 @@
     pDrain = new Emitter(ptank, { origin: V(R + 1.1, yBot - 0.3, 0), dir: V(0, -1, 0), speed: 1.6, spread: 0.12, jitter: 0.15, gravity: -2.0, color: 0xd9a441, size: 0.09, life: 0.6, count: 60, rate: 90 });
   })();
 
-  var flare = new THREE.Group(); flare.position.set(18.2, 0, 0); rig.add(flare);
+  // Flare stack: tucked back-right of V-201 (adds depth; keeps the train compact).
+  var flareX = 11.0, flareZ = -3.2;
+  var flare = new THREE.Group(); flare.position.set(flareX, 0, flareZ); rig.add(flare);
   var flareFlame;
   (function () {
-    var fB = -1.98, fTop = 5.8;
+    var fB = -1.98, fTop = 5.6, oY = fTop + 0.5;
     flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, fTop - fB, 20), M.steel()).translateY((fB + fTop) / 2));
-    flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.22, 0.5, 20), M.dark()).translateY(fTop + 0.15));
-    flareFlame = new Emitter(flare, { origin: V(0, fTop + 0.45, 0), dir: V(0, 1, 0), speed: 2.4, spread: 0.3, jitter: 0.5, gravity: 0.35, color: 0xff9a3a, size: 0.2, life: 0.8, count: 120, rate: 70 });
-    flareFlame.active = true;  // pilot always lit
+    flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.22, 0.5, 20), M.dark()).translateY(fTop + 0.15));
+    for (var a = 0; a < 3; a++) {                                 // pilot/riser tips on the rim
+      flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), M.steel())
+        .translateX(Math.cos(a / 3 * Math.PI * 2) * 0.2).translateY(fTop + 0.45).translateZ(Math.sin(a / 3 * Math.PI * 2) * 0.2));
+    }
+    // layered flame: hot core, orange body, dark smoke tips; all additive.
+    var core = new Emitter(flare, { origin: V(0, oY, 0), dir: V(0, 1, 0), speed: 3.0, spread: 0.16, jitter: 0.3, gravity: 0.6, color: 0xffe08a, size: 0.17, life: 0.5, count: 160, rate: 30, opacity: 0.9 });
+    var body = new Emitter(flare, { origin: V(0, oY, 0), dir: V(0, 1, 0), speed: 2.3, spread: 0.28, jitter: 0.55, gravity: 0.5, color: 0xff7a26, size: 0.26, life: 0.9, count: 240, rate: 20, opacity: 0.6 });
+    var smoke = new Emitter(flare, { origin: V(0, oY + 1.3, 0), dir: V(0.3, 1, 0), speed: 1.6, spread: 0.5, jitter: 0.5, gravity: 0.2, color: 0x2e2e2e, size: 0.45, life: 1.7, count: 120, rate: 0, opacity: 0.0 });
+    var glow = new THREE.PointLight(0xff8a3a, 0.0, 10, 2); glow.position.set(0, oY + 0.3, 0); flare.add(glow);
+    core.active = body.active = smoke.active = true;
+    var fire = 0, flick = 0;
+    // target: 1 when V-201's relief is actually venting to the flare, else a small lit pilot.
+    flareFlame = { update: function (dt, target) {
+      fire += (Math.max(0, Math.min(1, target)) - fire) * Math.min(1, dt * 2.5);
+      flick += dt * (9 + 22 * fire);
+      var fl = 0.78 + 0.22 * Math.sin(flick) + 0.1 * Math.sin(flick * 2.7);
+      core.rate = (30 + 230 * fire) * fl; core.opt.speed = 2.0 + 4.6 * fire; core.opt.life = 0.35 + 0.5 * fire;
+      body.rate = (18 + 250 * fire) * fl; body.opt.speed = 1.6 + 3.6 * fire; body.opt.life = 0.6 + 0.9 * fire;
+      smoke.rate = fire > 0.45 ? (40 + 130 * fire) : 0; smoke.opt.opacity = Math.max(0, (fire - 0.45)) * 0.55;
+      glow.intensity = (0.12 + 2.8 * fire) * fl;
+      core.update(dt); body.update(dt); smoke.update(dt);
+    } };
   })();
 
   // ---- interconnecting pipe-runs (what makes it ONE plant) ----
@@ -602,11 +662,11 @@
   var cTR   = connector([V(-5.95, -0.15, 0), V(-5.95, 2.45, 0), V(-3.2, 2.45, 0)], 0x6fd0f5, { midT: 0.78 }); // T-101 bottom -> R-301 feed
   var cRV   = connector([V(0.9, -1.75, 0), V(4.55, -1.75, 0), V(4.55, -0.05, 0)], 0x8ab4ff, { midT: 0.42 });   // R-301 product -> V-201 feed
   var cProd = connector([V(10.7, -2.3, 0), V(10.7, -1.3, 0), V(13.6, -1.3, 0)], 0x7fe0c0, { midT: 0.7 });     // V-201 bottoms -> P-401
-  connector([V(8.6, 5.4, 0), V(8.6, 5.9, 0), V(18.2, 5.9, 0), V(18.2, 5.8, 0)], 0xff9a3a, { flow: false, r: 0.06 }); // V-201 overhead/relief -> flare
+  connector([V(8.6, 5.4, 0), V(8.6, 6.1, 0), V(flareX, 6.1, 0), V(flareX, 6.1, flareZ), V(flareX, 5.7, flareZ)], 0xff9a3a, { flow: false, r: 0.06 }); // V-201 overhead/relief -> flare (back-right)
 
   // terminal-equipment label anchors (projected like the units)
   var pAnchor = new THREE.Object3D(); pAnchor.position.set(14.8, 1.5, 0); rig.add(pAnchor);
-  var fAnchor = new THREE.Object3D(); fAnchor.position.set(18.2, 6.6, 0); rig.add(fAnchor);
+  var fAnchor = new THREE.Object3D(); fAnchor.position.set(flareX, 6.6, flareZ); rig.add(fAnchor);
 
   // ---- interactive valves (click to open/close, like real hand valves) ----
   // The crude FILL valve (head of T-101) and the product EXPORT valve (outlet of
@@ -705,7 +765,7 @@
     pDrain.active = exportOpen && pLevel > 0.001; pDrain.update(dt);
     pExportValve.setFrac(exportOpen ? 0.65 : 0);
     feedValve.setFrac(feedOpen ? Math.max(0.2, FEED.tank) : 0);
-    flareFlame.update(dt);
+    flareFlame.update(dt, (CTX.vessel && CTX.vessel.sisActive) ? 1 : 0);  // flare fires when V-201 relief vents
 
     resize(); renderer.render(scene, camera);
     positionLabels();
