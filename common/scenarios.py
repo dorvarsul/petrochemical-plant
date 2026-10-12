@@ -91,6 +91,21 @@ class Scenario:
     ctrl_kp_num: int = 0     # proportional-gain numerator (signed)
     ctrl_kp_den: int = 1     # proportional-gain denominator (> 0)
 
+    # --- real-SIF realism (process units; see the ladder below) -------------
+    # The operator may only set the BPCS SETPOINT within [sp_lo, sp_hi]; a write
+    # outside that band is clamped by the control PLC (which defeats the old
+    # off-scale-setpoint attack — hence the evolved manual-mode attack). The SIS
+    # gains a pre-alarm "H" below its "HH" trip, and a manual reset that only
+    # clears the latch once the PV has fallen a deadband below the trip. The
+    # escalation ladder for each scenario is:
+    #     sp_lo  <  (SP range)  <  sp_hi == pre_alarm_h  <  trip_hh  <  fail_at
+    # (the reactor is the one exception — its ignition point sits at the trip, so
+    #  sp_hi < pre_alarm_h < trip_hh; see the per-scenario values.)
+    sp_lo: float = 0.0           # operator setpoint clamp — low  (process units)
+    sp_hi: float = 0.0           # operator setpoint clamp — high (process units)
+    pre_alarm_h: float = 0.0     # SIS "H" pre-alarm, below the "HH" trip
+    reset_deadband: float = 0.0  # reset permissive margin below trip_hh
+
     # --- derived ---
     @property
     def setpoint_reg(self) -> int:
@@ -111,6 +126,37 @@ class Scenario:
         the loop easing off as the PV nears an in-range target. Kept well within
         a signed 16-bit register."""
         return min(2 * self.reg_full_scale, 32000)
+
+    @property
+    def attack_manual_out_reg(self) -> int:
+        """The dangerous actuator position the evolved attack forces in BPCS
+        MANUAL mode (per-mille). Where opening the actuator raises the PV
+        (tank feed valve, vessel compressor; ``ctrl_kp_num > 0``) the attacker
+        drives it wide open (1000); for the reactor (coolant valve, negative
+        gain) it drives it shut (0) to remove cooling. Manual mode bypasses the
+        control law, so the setpoint clamp cannot stop it."""
+        return 1000 if self.ctrl_kp_num > 0 else 0
+
+    @property
+    def sp_lo_reg(self) -> int:
+        """Operator setpoint-clamp low bound as an integer register value."""
+        return int(round(self.sp_lo * self.reg_scale))
+
+    @property
+    def sp_hi_reg(self) -> int:
+        """Operator setpoint-clamp high bound as an integer register value."""
+        return int(round(self.sp_hi * self.reg_scale))
+
+    @property
+    def pre_alarm_h_reg(self) -> int:
+        """SIS "H" pre-alarm threshold as an integer register value."""
+        return int(round(self.pre_alarm_h * self.reg_scale))
+
+    @property
+    def reset_db_reg(self) -> int:
+        """SIS reset deadband as an integer register value (reset permits only
+        when PV < trip_reg - reset_db_reg)."""
+        return int(round(self.reset_deadband * self.reg_scale))
 
     @property
     def pv_full_scale(self) -> float:
@@ -149,6 +195,13 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
+# The BPCS actuator may move at most this many per-mille per 100 ms scan — a
+# realistic output rate limit. Fixed (not per-scenario) and small enough that it
+# never disturbs the tuned baseline (startup peak == setpoint for all three),
+# while bounding how fast a MANUAL→AUTO switch or an attack can slew the valve.
+CTRL_RATE_LIM_PM: int = 100
+
+
 # ---------------------------------------------------------------------------
 # The three scenarios. Coefficients are tuned for a LEGIBLE demo (slow, ~2-3 min
 # to failure at full drive; the trip comfortably holds the process safe), not
@@ -177,6 +230,9 @@ SCENARIOS: dict[str, Scenario] = {
         physics=dict(area=1.0, q_in_max=0.05, q_out=0.02),
         # feed = 0.40 + 0.60*(SP-L)[m]; holds 5 m, feed→100% when SP driven high.
         ctrl_bias_pm=400, ctrl_kp_num=3, ctrl_kp_den=5,
+        # ladder: 1 < SP < 8 == H ; 8 < 9 (HH) < 10 (fail). Clamped SP (8 m)
+        # settles below trip → a setpoint-tamper alone can never overfill.
+        sp_lo=1.0, sp_hi=8.0, pre_alarm_h=8.5, reset_deadband=0.5,
     ),
     "vessel": Scenario(
         id="vessel",
@@ -199,6 +255,9 @@ SCENARIOS: dict[str, Scenario] = {
         physics=dict(k_in=0.10, k_out=0.02, k_relief=0.30),
         # feed = 0.20 + 0.30*(SP-P)[bar]; holds 5 bar, feed→100% when SP high.
         ctrl_bias_pm=200, ctrl_kp_num=3, ctrl_kp_den=1,
+        # ladder: 2 < SP < 14 ; 15 (H) < 16 (HH) < 20 (fail). Clamped SP (14 bar)
+        # settles below trip → a setpoint-tamper alone can never rupture.
+        sp_lo=2.0, sp_hi=14.0, pre_alarm_h=15.0, reset_deadband=1.0,
     ),
     "reactor": Scenario(
         id="reactor",
@@ -239,8 +298,55 @@ SCENARIOS: dict[str, Scenario] = {
         ),
         # u = 0.50 - 0.04*(SP-T)[°C]; holds 80 °C at ~50% coolant, u→0% when SP high.
         ctrl_bias_pm=500, ctrl_kp_num=-4, ctrl_kp_den=1,
+        # ladder (reactor exception): 50 < SP < 100 ; 105 (H) < 110 (HH) < 300
+        # (fail). The exotherm reaches ~110 °C even at the clamped setpoint, so a
+        # setpoint-tamper is caught by the HEALTHY SIS (trip, no failure) rather
+        # than held below trip — the uniform invariant is only "tamper never
+        # fails", realized here by the trip instead of by the clamp alone.
+        sp_lo=50.0, sp_hi=100.0, pre_alarm_h=105.0, reset_deadband=5.0,
     ),
 }
+
+# ---------------------------------------------------------------------------
+# P-401 product-storage tank — the terminal SINK of the flowsheet
+# (V-201 bottoms -> P-401 -> export). It is NOT a scenario: it has no BPCS/SIS
+# pair and is never an attack target, so it is a plain parameter block rather
+# than a Scenario. It carries a single level ODE and alarm thresholds; its fill
+# comes from the (steady) V-201 bottoms draw and it empties through an
+# operator-commanded EXPORT valve. q_export == q_fill is deliberate: with EXPORT
+# open the level holds (dL/dt = 0, no baseline drift); with EXPORT shut it fills
+# to HI then HH. LO/LL become reachable only if the fill is reduced.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ProductStorage:
+    tag: str = "P-401"
+    pv_name: str = "level"
+    pv_units: str = "m"
+    reg_scale: int = 1000          # reg = round(level_m * 1000)  (mm)
+    area: float = 1.0              # tank cross-section (m^2)
+    height_full: float = 6.0       # brim (m); gauge/3D full scale
+    level0: float = 3.0            # initial / reset level (m)
+    q_fill: float = 0.04           # steady V-201 bottoms inflow (m^3/s)
+    q_export: float = 0.04         # draw when EXPORT open (== q_fill → holds)
+    ll: float = 0.5                # low-low level alarm (m)
+    lo: float = 1.0                # low level alarm (m)
+    hi: float = 5.0                # high level alarm (m)
+    hh: float = 5.5                # high-high level alarm (m)
+
+    @property
+    def reg_full_scale(self) -> int:
+        return int(round(self.height_full * self.reg_scale))
+
+    def pv_to_reg(self, level: float) -> int:
+        raw = round(level * self.reg_scale)
+        return int(_clamp(raw, 0, self.reg_full_scale))
+
+    def fraction(self, level: float) -> float:
+        return _clamp(level / self.height_full, 0.0, 1.0)
+
+
+PRODUCT = ProductStorage()
+
 
 DEFAULT_SCENARIO = "tank"
 

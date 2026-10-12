@@ -112,5 +112,99 @@ class TestControlLaw(unittest.TestCase):
             self.assertGreater(sc.ctrl_bias_pm, 0, sid)
 
 
+class TestSifRealism(unittest.TestCase):
+    """The real-SIF realism fields: setpoint clamp, pre-alarm, reset deadband."""
+
+    def test_setpoint_clamp_band_ordering(self):
+        # Operator band is a strict interval containing the baseline setpoint.
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertLess(sc.sp_lo, sc.sp_hi, sid)
+            self.assertLessEqual(sc.sp_lo, sc.setpoint, sid)
+            self.assertLessEqual(sc.setpoint, sc.sp_hi, sid)
+
+    def test_clamp_high_below_or_at_trip(self):
+        # tank/vessel: the clamped-high setpoint is strictly below the trip, so a
+        # setpoint-tamper settles safe. reactor is the documented exception
+        # (sp_hi == trip_hh: its exotherm trips even at the clamp).
+        self.assertLess(scenarios.get("tank").sp_hi, scenarios.get("tank").trip_hh)
+        self.assertLess(scenarios.get("vessel").sp_hi, scenarios.get("vessel").trip_hh)
+        self.assertLessEqual(
+            scenarios.get("reactor").sp_hi, scenarios.get("reactor").trip_hh
+        )
+
+    def test_pre_alarm_between_setpoint_and_trip(self):
+        # "H" sits above the operating band and strictly below the "HH" trip.
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertGreaterEqual(sc.pre_alarm_h, sc.sp_hi, sid)
+            self.assertLess(sc.pre_alarm_h, sc.trip_hh, sid)
+
+    def test_reset_deadband_positive_and_below_trip(self):
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertGreater(sc.reset_deadband, 0.0, sid)
+            self.assertGreater(sc.reset_db_reg, 0, sid)
+            # The reset permissive (trip - deadband) stays above the setpoint, so
+            # a reset is only possible once the process is genuinely back down.
+            self.assertGreater(sc.trip_hh - sc.reset_deadband, sc.setpoint, sid)
+
+    def test_derived_regs_match_scaling(self):
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertEqual(sc.sp_lo_reg, round(sc.sp_lo * sc.reg_scale), sid)
+            self.assertEqual(sc.sp_hi_reg, round(sc.sp_hi * sc.reg_scale), sid)
+            self.assertEqual(
+                sc.pre_alarm_h_reg, round(sc.pre_alarm_h * sc.reg_scale), sid
+            )
+            self.assertEqual(
+                sc.reset_db_reg, round(sc.reset_deadband * sc.reg_scale), sid
+            )
+
+    def test_attack_manual_out_maps_to_gain_sign(self):
+        # Positive gain (open raises PV) -> drive wide open; negative gain
+        # (coolant valve) -> drive shut.
+        self.assertEqual(scenarios.get("tank").attack_manual_out_reg, 1000)
+        self.assertEqual(scenarios.get("vessel").attack_manual_out_reg, 1000)
+        self.assertEqual(scenarios.get("reactor").attack_manual_out_reg, 0)
+
+    def test_rate_limit_constant_sane(self):
+        self.assertGreater(scenarios.CTRL_RATE_LIM_PM, 0)
+        self.assertLessEqual(scenarios.CTRL_RATE_LIM_PM, 1000)
+
+
+class TestProductStorage(unittest.TestCase):
+    """P-401 terminal sink: alarm ordering and the hold-when-exporting choice."""
+
+    def setUp(self):
+        self.p = scenarios.PRODUCT
+
+    def test_alarm_levels_ordered(self):
+        p = self.p
+        self.assertLess(p.ll, p.lo)
+        self.assertLess(p.lo, p.hi)
+        self.assertLess(p.hi, p.hh)
+        self.assertLess(p.hh, p.height_full)
+        self.assertLess(0.0, p.ll)
+
+    def test_export_open_holds_level(self):
+        # q_export == q_fill is the no-baseline-drift choice: with EXPORT open
+        # the net flow is zero, so the level neither fills nor drains.
+        self.assertEqual(self.p.q_export, self.p.q_fill)
+
+    def test_initial_level_in_normal_band(self):
+        p = self.p
+        self.assertLess(p.lo, p.level0)
+        self.assertLess(p.level0, p.hi)
+
+    def test_reg_scaling(self):
+        p = self.p
+        self.assertEqual(p.reg_full_scale, round(p.height_full * p.reg_scale))
+        self.assertEqual(p.pv_to_reg(-1.0), 0)
+        self.assertEqual(p.pv_to_reg(1e6), p.reg_full_scale)
+        self.assertAlmostEqual(p.fraction(p.height_full), 1.0)
+        self.assertEqual(p.fraction(-1.0), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
