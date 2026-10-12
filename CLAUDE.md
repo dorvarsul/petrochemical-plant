@@ -37,8 +37,12 @@ three into ONE connected flowsheet — `T-101` → `R-301` → `V-201`, forward-
 Python + in-memory-PLC path: `physics/plant.py`, `bridge/plant_bridge.py`,
 `bridge/run_plant_demo.py`, `tests/test_plant.py`. Couplings are zero at the
 baseline operating point, so the whole plant holds a connected steady state; each
-scenario is "which unit the attacker targets". Phase 2 adds the whole-plant view +
-the live OpenPLC multi-unit stack; OpenModelica is the FINAL phase.
+scenario is "which unit the attacker targets". Phase 2's whole-plant view is now
+built on that same fake-PLC path (`ui/plant_server.py` + `ui/static/plant.html`;
+`python3 -m ui.plant_server`, port 8092) — a spoofable three-tile HMI strip over
+one unspoofable 3D ground-truth train of the whole flowsheet, attack any unit,
+forward couplings animated. The live OpenPLC multi-unit stack remains the rest of
+Phase 2; OpenModelica is the FINAL phase.
 - Tank overfill → high-level trip (single ODE: level; the anchor)
 - Vessel overpressure → relief valve (single ODE: pressure)
 - Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)

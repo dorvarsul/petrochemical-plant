@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PetroTwin · Connected Plant</title>
+<style>
+  :root { --bg:#0d1016; --panel:#141a22; --line:#232c38; --txt:#e7edf5;
+          --dim:#8aa0b5; --green:#27d07a; --red:#ff4d4d; --amber:#ffb020;
+          --blue:#3a7bff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--txt);
+              font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  body { display:flex; flex-direction:column; overflow:hidden; }
+  header { display:flex; align-items:center; gap:12px; padding:10px 18px;
+           border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.3px; }
+  header .meta { color:var(--dim); font-size:13px; }
+  header .spacer { flex:1; }
+  label.ctl { color:var(--dim); font-size:13px; display:inline-flex; align-items:center; gap:6px; }
+  select, button { font:inherit; font-weight:600; border:1px solid var(--line);
+           background:#1b2430; color:var(--txt); padding:8px 12px; border-radius:8px; cursor:pointer; }
+  button:hover, select:hover { border-color:#3a4759; }
+  button.attack { background:#3a1414; border-color:#5e1d1d; color:#ff8b8b; }
+  button.attack:hover { background:#4d1818; }
+  button:disabled { opacity:.5; cursor:default; }
+  .legend { padding:6px 18px; font-size:12px; color:var(--dim);
+            border-bottom:1px solid var(--line); background:#10151c; }
+  .legend b { color:var(--txt); }
+
+  /* ---- HMI strip (spoofable) ---- */
+  .hmi-strip { display:flex; gap:0; border-bottom:1px solid var(--line); background:#0a0e13; }
+  .hmi-strip .tile { flex:1; min-width:0; display:flex; gap:14px; padding:14px 18px; align-items:center; }
+  .hmi-strip .tile + .tile { border-left:1px solid var(--line); }
+  .hmi-strip .tile.attacked { background:#160d0d; box-shadow: inset 0 0 0 1px #5e1d1d; }
+  .minigauge { position:relative; width:46px; height:150px; border:2px solid #2a3340;
+               border-radius:7px; background:#0f141b; overflow:hidden; flex:none; }
+  .minigauge .fill { position:absolute; left:0; right:0; bottom:0; background:var(--green);
+                     transition:height .15s linear, background .3s; }
+  .minigauge .mark { position:absolute; left:0; right:0; border-top:1px dashed #51607340; }
+  .minigauge .mark.trip { border-top:1px dashed var(--red); }
+  .minigauge .mark.sp { border-top:1px dashed #6b7c90; }
+  .tbody { min-width:0; }
+  .tbody .tag { font-size:12px; color:var(--dim); letter-spacing:.5px; }
+  .tbody .tag b { color:var(--txt); font-weight:700; }
+  .tbody .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1; }
+  .tbody .big span { font-size:15px; color:var(--dim); font-weight:500; }
+  .lamp { display:inline-flex; align-items:center; gap:7px; font-weight:700;
+          padding:4px 9px; border-radius:6px; font-size:12px; margin-top:4px; }
+  .lamp .dot { width:10px; height:10px; border-radius:50%; }
+  .lamp.ok { background:#0f2419; color:var(--green); } .lamp.ok .dot { background:var(--green); box-shadow:0 0 8px var(--green); }
+  .lamp.trip { background:#2a1111; color:var(--red); } .lamp.trip .dot { background:var(--red); box-shadow:0 0 8px var(--red); }
+  .sp { font-size:11px; color:var(--dim); margin-top:5px; }
+  .sp b { font-variant-numeric:tabular-nums; }
+
+  /* ---- 3D whole-plant view (unspoofable ground truth) ---- */
+  main { flex:1; min-height:0; position:relative; background:#070a0e; }
+  #c3d { width:100%; height:100%; display:block; }
+  .srcline { position:absolute; left:16px; top:12px; font-size:11px; color:var(--dim); pointer-events:none; }
+  #labels { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .lab { position:absolute; transform:translate(-50%,-100%); text-align:center;
+         font-variant-numeric:tabular-nums; white-space:nowrap; pointer-events:none;
+         text-shadow:0 1px 6px #000, 0 0 2px #000; transition:opacity .2s; }
+  .lab .t { font-size:12px; color:var(--dim); letter-spacing:.5px; }
+  .lab .t b { color:#dfe8f2; }
+  .lab .v { font-size:20px; font-weight:700; }
+  .lab .s { font-size:11px; font-weight:700; letter-spacing:.5px; }
+  .flowlabel { position:absolute; transform:translate(-50%,-50%); font-size:10px;
+               color:#7f93a8; letter-spacing:.5px; pointer-events:none; text-shadow:0 1px 4px #000; }
+  .rupture { position:absolute; left:50%; bottom:22px; transform:translateX(-50%); display:none;
+             align-items:center; justify-content:center; background:rgba(120,10,10,.5);
+             border:1px solid #7a2020; color:#ffd3d3; font-size:16px; font-weight:800;
+             letter-spacing:1px; text-shadow:0 2px 12px #000; padding:12px 22px; border-radius:10px; }
+  .rupture.on { display:flex; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>PetroTwin · Connected Plant</h1>
+    <span class="meta">T-101 → R-301 → V-201 · <span id="clock">t = 0.0 s</span></span>
+    <span class="spacer"></span>
+    <label class="ctl">target
+      <select id="unitSel">
+        <option value="tank">T-101 tank (overfill)</option>
+        <option value="reactor" selected>R-301 reactor (runaway)</option>
+        <option value="vessel">V-201 vessel (overpressure)</option>
+      </select>
+    </label>
+    <label class="ctl"><input type="checkbox" id="spOnly"> setpoint-only</label>
+    <span id="attackChip" class="meta">attack: inactive</span>
+    <button class="attack" id="btnAttack">Inject attack</button>
+    <button id="btnStand">Stand down</button>
+    <button id="btnReset">Reset plant</button>
+  </header>
+  <div class="legend">
+    <b>Top — Operator HMI:</b> one tile per unit, each polled from that unit's Safety PLC (spoofable).
+    &nbsp;·&nbsp; <b>Below — Ground truth:</b> the whole connected flowsheet, driven straight from the physics (unspoofable).
+    <span id="legendTail">Attack one unit: its SIS is overridden, so its HMI tile stays green/frozen while the 3D shows it run to failure — and the forward couplings carry the disturbance downstream.</span>
+  </div>
+
+  <div class="hmi-strip" id="hmiStrip"><!-- tiles injected --></div>
+
+  <main>
+    <canvas id="c3d"></canvas>
+    <div class="srcline">source: physics model (direct) — not via any PLC or network · flow: T-101 → R-301 → V-201</div>
+    <div id="labels"></div>
+    <div class="rupture" id="rupture">● FAILURE ●</div>
+  </main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var FLOW = ["tank", "reactor", "vessel"];
+
+  // ===================== Three.js scene =====================
+  var canvas = document.getElementById("c3d");
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x070a0e);
+  scene.fog = new THREE.Fog(0x070a0e, 42, 100);
+  var camera = new THREE.PerspectiveCamera(52, 1, 0.1, 260);
+  camera.position.set(1.5, 8.6, 32);
+  camera.lookAt(1.5, 0.4, 0);
+
+  scene.add(new THREE.HemisphereLight(0x8ea2c0, 0x0a0e13, 0.75));
+  scene.add(new THREE.AmbientLight(0x404a5a, 0.4));
+  var key = new THREE.DirectionalLight(0xffffff, 0.95); key.position.set(6, 11, 8); scene.add(key);
+  var rim = new THREE.DirectionalLight(0x5577aa, 0.5); rim.position.set(-8, 5, -6); scene.add(rim);
+
+  var rig = new THREE.Group(); scene.add(rig);  // the whole plant (gentle sway)
+
+  // shared skid spanning the whole train
+  var skid = new THREE.Mesh(new THREE.BoxGeometry(37, 0.2, 7),
+    new THREE.MeshStandardMaterial({ color: 0x1c232e, roughness: 1 }));
+  skid.position.set(2, -2.08, 0); rig.add(skid);
+  var grade = new THREE.Mesh(new THREE.BoxGeometry(39, 0.3, 8.4),
+    new THREE.MeshStandardMaterial({ color: 0x141a22, roughness: 1 }));
+  grade.position.set(2, -2.25, 0); rig.add(grade);
+
+  // ---- materials ----
+  function std(c, m, r, opts) {
+    return new THREE.MeshStandardMaterial(Object.assign(
+      { color: c, metalness: m == null ? 0.7 : m, roughness: r == null ? 0.4 : r }, opts || {}));
+  }
+  var M = {
+    steel: function () { return std(0x9aa6b4, 0.75, 0.33); },
+    dark: function () { return std(0x5b6675, 0.7, 0.45); },
+    pipe: function () { return std(0x828d9c, 0.65, 0.4); },
+    base: function () { return std(0x39424f, 0.5, 0.6); },
+    glass: function () { return std(0xbcd0e6, 0.1, 0.18, { transparent: true, opacity: 0.12, side: THREE.DoubleSide }); },
+  };
+
+  // ---- primitive helpers ----
+  function tube(a, b, r, mat) {
+    var d = new THREE.Vector3().subVectors(b, a), len = d.length();
+    var m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 18), mat);
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+    return m;
+  }
+  function V(x, y, z) { return new THREE.Vector3(x, y, z); }
+  function lerpColor(a, b, t) { var c = new THREE.Color(a); return c.lerp(new THREE.Color(b), Math.max(0, Math.min(1, t))); }
+
+  function valve(pos, axis, kind) {
+    var g = new THREE.Group(); g.position.copy(pos);
+    var bodyMat = std(0x4a5568, 0.5, 0.45);
+    var body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), bodyMat); g.add(body);
+    var bonnet = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.34, 12), M.steel());
+    var top;
+    if (kind === "control") {
+      top = new THREE.Mesh(new THREE.SphereGeometry(0.2, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), std(0x9fb0c4, 0.4, 0.5));
+    } else if (kind === "esd") {
+      top = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.2, 16), std(0xd23b3b, 0.3, 0.5));
+    } else {
+      top = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.035, 8, 20), std(0xd0d8e2, 0.3, 0.5));
+    }
+    if (axis === "x") { bonnet.rotation.z = Math.PI / 2; bonnet.position.x = 0.3;
+      if (kind) { top.rotation.z = Math.PI / 2; top.position.x = 0.5; } else { top.rotation.y = Math.PI / 2; top.position.x = 0.5; } }
+    else { bonnet.position.y = 0.3; if (kind) { top.position.y = 0.5; } else { top.rotation.x = Math.PI / 2; top.position.y = 0.5; } }
+    g.add(bonnet); g.add(top);
+    var shutHex = kind === "esd" ? 0x3a2030 : 0x4a5568;
+    g.setFrac = function (frac) {
+      frac = Math.max(0, Math.min(1, frac));
+      bodyMat.color.copy(lerpColor(shutHex, 0x27d07a, frac));
+      bodyMat.emissive.copy(lerpColor(0x000000, 0x0c3d22, frac));
+    };
+    g.setOpen = function (open) { g.setFrac(open ? 1 : 0); };
+    return g;
+  }
+
+  function instrument(pos, leadTo) {
+    var g = new THREE.Group();
+    var ball = new THREE.Mesh(new THREE.SphereGeometry(0.22, 20, 16), std(0x11161e, 0.2, 0.6));
+    ball.position.copy(pos); g.add(ball);
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.02, 8, 24), std(0xd0d8e2, 0.3, 0.5));
+    ring.position.copy(pos); ring.lookAt(camera.position.clone().add(pos)); g.add(ring);
+    g.add(tube(pos, leadTo, 0.015, std(0x9aa6b4, 0.4, 0.5)));
+    return g;
+  }
+
+  // ---- particle emitter (vapor / spill / burst) ----
+  function Emitter(parent, opt) {
+    this.opt = opt; this.n = opt.count || 120;
+    this.pos = new Float32Array(this.n * 3);
+    this.part = [];
+    for (var i = 0; i < this.n; i++) { this.part.push({ life: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }); this.pos[i * 3 + 1] = -999; }
+    this.geo = new THREE.BufferGeometry();
+    this.geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    this.mat = new THREE.PointsMaterial({ color: opt.color, size: opt.size || 0.11,
+      transparent: true, opacity: opt.opacity == null ? 0.75 : opt.opacity,
+      blending: THREE.AdditiveBlending, depthWrite: false });
+    this.points = new THREE.Points(this.geo, this.mat); parent.add(this.points);
+    this.rate = opt.rate || 60; this.acc = 0; this.active = false;
+  }
+  Emitter.prototype.burst = function (k) { this._spawn(k == null ? this.n : k); };
+  Emitter.prototype._spawn = function (k) {
+    var o = this.opt, origin = o.origin, dir = o.dir || V(0, 1, 0), sp = o.spread || 0.1;
+    for (var s = 0; s < k; s++) {
+      for (var i = 0; i < this.n; i++) {
+        var p = this.part[i];
+        if (p.life <= 0) {
+          p.life = (o.life || 1.2) * (0.6 + Math.random() * 0.8);
+          p.x = origin.x + (Math.random() - 0.5) * sp;
+          p.y = origin.y + (Math.random() - 0.5) * sp;
+          p.z = origin.z + (Math.random() - 0.5) * sp;
+          var spd = (o.speed || 1.2) * (0.6 + Math.random() * 0.8);
+          var jx = (Math.random() - 0.5) * (o.jitter || 0.6);
+          var jz = (Math.random() - 0.5) * (o.jitter || 0.6);
+          p.vx = dir.x * spd + jx; p.vy = dir.y * spd; p.vz = dir.z * spd + jz;
+          break;
+        }
+      }
+    }
+  };
+  Emitter.prototype.update = function (dt) {
+    if (this.active) { this.acc += this.rate * dt; var k = Math.floor(this.acc); this.acc -= k; if (k > 0) this._spawn(k); }
+    var g = this.opt.gravity == null ? -0.6 : this.opt.gravity;
+    for (var i = 0; i < this.n; i++) {
+      var p = this.part[i];
+      if (p.life > 0) {
+        p.life -= dt; p.vy += g * dt;
+        p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+        this.pos[i * 3] = p.x; this.pos[i * 3 + 1] = p.y; this.pos[i * 3 + 2] = p.z;
+      } else { this.pos[i * 3 + 1] = -999; }
+    }
+    this.mat.opacity = (this.opt.opacity == null ? 0.75 : this.opt.opacity);
+    this.geo.attributes.position.needsUpdate = true;
+  };
+
+  // ===================== per-unit plant builders =====================
+  // Each returns { group, update(ctx) } where ctx =
+  //   {frac, pv, overTrip, failed, feed, sisActive, attacked, dt}
+
+  function buildTank() {
+    var g = new THREE.Group();
+    var R = 1.35, H = 2.7, yBot = -1.35;
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 48, 1, true), M.glass()));
+    [yBot, yBot + H].forEach(function (y) {
+      var ring = new THREE.Mesh(new THREE.TorusGeometry(R, 0.04, 10, 48), M.dark());
+      ring.rotation.x = Math.PI / 2; ring.position.y = y; g.add(ring);
+    });
+    var roof = new THREE.Mesh(new THREE.ConeGeometry(R + 0.03, 0.5, 48), M.steel());
+    roof.position.y = yBot + H + 0.25; g.add(roof);
+    var manway = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.18, 16), M.steel());
+    manway.position.y = yBot + H + 0.55; g.add(manway);
+    var floor = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.06, 48), M.dark());
+    floor.position.y = yBot; g.add(floor);
+
+    var liqMat = std(0x0e0e12, 0.15, 0.4, { transparent: true, opacity: 0.95 });  // crude oil (black)
+    var liquid = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.06, R - 0.06, H, 48), liqMat);
+    g.add(liquid);
+
+    var pm = M.pipe();
+    var src = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.5, 24), M.base());
+    src.position.set(-3.9, yBot + 0.75, 0); g.add(src);
+    g.add(new THREE.Mesh(new THREE.ConeGeometry(0.52, 0.3, 24), M.dark()).translateX(-3.9).translateY(yBot + 1.65));
+    g.add(tube(V(-3.9, yBot + 0.75, 0), V(-3.9, yBot + H + 0.9, 0), 0.09, pm));
+    g.add(tube(V(-3.9, yBot + H + 0.9, 0), V(-0.9, yBot + H + 0.9, 0), 0.09, pm));
+    g.add(tube(V(-0.9, yBot + H + 0.9, 0), V(-0.9, yBot + H + 0.15, 0), 0.09, pm));
+    var esd = valve(V(-2.6, yBot + H + 0.9, 0), "x", "esd"); g.add(esd);
+    var fv = valve(V(-0.9, yBot + H + 0.55, 0), "y", "control"); g.add(fv);
+    g.add(tube(V(R - 0.1, yBot + 0.1, 0), V(R + 1.3, yBot + 0.1, 0), 0.07, pm));
+    g.add(tube(V(R + 1.3, yBot + 0.1, 0), V(R + 1.3, yBot + 0.5, 0), 0.07, pm));
+    var dest = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.2, 24), M.base());
+    dest.position.set(R + 1.3, yBot + 0.6, 0); g.add(dest);
+    g.add(tube(V(R - 0.1, yBot + H - 0.15, 0), V(R + 0.55, yBot + H - 0.15, 0), 0.08, pm));
+    g.add(instrument(V(R + 0.55, yBot + H * 0.5, 0.2), V(R, yBot + H * 0.5, 0)));
+
+    var feed = new Emitter(g, { origin: V(-0.9, yBot + H - 0.1, 0), dir: V(0, -1, 0), speed: 1.4, spread: 0.12, jitter: 0.1, gravity: -1.5, color: 0x7a5a3a, size: 0.08, life: 0.5, count: 60, rate: 80 });
+    var spill = new Emitter(g, { origin: V(0, yBot + H + 0.02, 0), dir: V(0, 0.2, 0), speed: 0.8, spread: R * 1.3, jitter: 1.4, gravity: -3.2, color: 0x241a10, size: 0.1, life: 1.3, count: 220, rate: 200 });
+
+    return { group: g, update: function (c) {
+      var f = Math.max(0.0001, c.frac);
+      liquid.scale.y = f; liquid.position.y = yBot + f * H / 2;
+      liqMat.color.copy(c.failed ? new THREE.Color(0xff3b3b) : (c.overTrip ? new THREE.Color(0xffb020) : new THREE.Color(0x0e0e12)));  // crude oil (black)
+      fv.setFrac(c.feed); esd.setOpen(!c.sisActive);
+      feed.active = c.feed > 0.01 && !c.failed; feed.rate = 30 + 90 * c.feed;
+      spill.active = c.failed;
+      feed.update(c.dt); spill.update(c.dt);
+    } };
+  }
+
+  function latheVessel(R, cyl, headR, mat) {
+    var pts = [], seg = 10;
+    for (var i = 0; i <= seg; i++) { var a = -Math.PI / 2 + (Math.PI / 2) * (i / seg); pts.push(new THREE.Vector2(Math.cos(a) * R, -cyl / 2 + Math.sin(a) * headR)); }
+    pts.push(new THREE.Vector2(R, cyl / 2));
+    for (var j = 0; j <= seg; j++) { var b = (Math.PI / 2) * (j / seg); pts.push(new THREE.Vector2(Math.cos(b) * R, cyl / 2 + Math.sin(b) * headR)); }
+    return new THREE.Mesh(new THREE.LatheGeometry(pts, 48), mat);
+  }
+
+  function buildVessel() {
+    var g = new THREE.Group();
+    var R = 1.15, cyl = 1.9, headR = 0.85;
+    // Translucent shell so the separator internals read; still tinted by
+    // pressure (the ground-truth PV): teal -> amber -> red toward rupture.
+    var bodyMat = std(0x2bd4c4, 0.3, 0.25, { transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+    g.add(latheVessel(R, cyl, headR, bodyMat));
+
+    // --- separator internals (V-201 is a vapour/liquid separation drum) ---
+    // Steady liquid inventory in the bottom; vapour space above. Overhead vapour
+    // + PSV relief go to the flare; the liquid bottoms go to product storage.
+    var poolTop = -0.05, poolBot = -cyl / 2 - headR * 0.6, ph = poolTop - poolBot;
+    var pool = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.05, R - 0.05, ph, 40),
+      std(0x2f7fe0, 0.1, 0.25, { transparent: true, opacity: 0.88 }));
+    pool.position.y = poolBot + ph / 2; g.add(pool);
+    var surface = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.05, R - 0.05, 0.02, 40),
+      std(0x7fb4ff, 0.1, 0.2, { transparent: true, opacity: 0.95 }));
+    surface.position.y = poolTop; g.add(surface);
+    // demister / mesh pad just below the vapour outlet
+    var demister = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.12, R - 0.12, 0.16, 32),
+      std(0x9aa6b4, 0.4, 0.85, { transparent: true, opacity: 0.5 }));
+    demister.position.y = cyl / 2 - 0.2; g.add(demister);
+    // inlet diverter plate behind the two-phase feed nozzle
+    var diverter = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.05), M.steel());
+    diverter.position.set(-R + 0.45, 0.25, 0); diverter.rotation.z = 0.5; g.add(diverter);
+    // external level gauge (sight glass) on the front, reading the liquid level
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.3, 12),
+      std(0xbcd0e6, 0.1, 0.2, { transparent: true, opacity: 0.3 })).translateY(-0.3).translateZ(R + 0.02));
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.72, 12),
+      std(0x2f7fe0, 0.1, 0.2, { transparent: true, opacity: 0.9 })).translateY(-0.59).translateZ(R + 0.02));
+
+    var skirt = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.8, R * 0.9, 0.9, 32, 1, true), M.dark());
+    skirt.position.y = -cyl / 2 - headR - 0.45; g.add(skirt);
+    var baseRing = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.95, R * 0.95, 0.12, 32), M.base());
+    baseRing.position.y = -cyl / 2 - headR - 0.9; g.add(baseRing);
+
+    var pm = M.pipe();
+    var comp = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.8), M.base());
+    comp.position.set(-3.6, -0.9, 0); g.add(comp);
+    var motor = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.7, 16), M.steel());
+    motor.rotation.z = Math.PI / 2; motor.position.set(-3.6, -0.45, 0); g.add(motor);
+    // two-phase feed enters the mid-shell (through the BPCS control valve), onto
+    // the inlet diverter inside: vapour rises, liquid drops to the pool.
+    g.add(tube(V(-3.15, -0.9, 0), V(-3.15, 0.2, 0), 0.09, pm));
+    g.add(tube(V(-3.15, 0.2, 0), V(-R + 0.08, 0.2, 0), 0.09, pm));
+    var fv = valve(V(-R - 0.7, 0.2, 0), "x", "control"); g.add(fv);
+    g.add(tube(V(0.2, -cyl / 2 - headR + 0.05, 0), V(0.2, -cyl / 2 - headR - 0.5, 0.0), 0.06, pm));
+    g.add(tube(V(0.2, -cyl / 2 - headR - 0.5, 0), V(1.8, -cyl / 2 - headR - 0.5, 0), 0.06, pm));
+    var dest = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.9, 20), M.base());
+    dest.position.set(2.1, -cyl / 2 - headR - 0.5, 0); dest.rotation.z = Math.PI / 2; g.add(dest);
+
+    var topY = cyl / 2 + headR;
+    var psvBody = std(0x7a8696, 0.6, 0.4);
+    var psv = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.22, 0.4, 16), psvBody);
+    psv.position.set(0, topY + 0.2, 0); g.add(psv);
+    var stack = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 1.5, 16), M.steel());
+    stack.position.set(0, topY + 1.15, 0); g.add(stack);
+    g.add(new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.03, 8, 20), std(0xd0d8e2, 0.3, 0.5)).translateY(topY + 1.9));
+
+    var gauge = new THREE.Group(); gauge.position.set(R + 0.55, 0.2, 0);
+    g.add(tube(V(R, 0.2, 0), V(R + 0.5, 0.2, 0), 0.03, pm));
+    gauge.add(new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.08, 28), std(0x11161e, 0.2, 0.6)).rotateZ(Math.PI / 2));
+    var redzone = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.41, 24, 1, -Math.PI * 0.75, Math.PI * 0.25), std(0x551515, 0, 1, { side: THREE.DoubleSide }));
+    redzone.position.x = 0.05; redzone.rotation.y = Math.PI / 2; gauge.add(redzone);
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.03, 8, 28), std(0xd0d8e2, 0.3, 0.5));
+    ring.rotation.y = Math.PI / 2; gauge.add(ring);
+    var needle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.36, 0.03), std(0xff5a5a, 0.1, 0.5));
+    var nHub = new THREE.Group(); nHub.position.x = 0.06; needle.position.y = 0.14; nHub.add(needle); gauge.add(nHub);
+    g.add(gauge);
+    g.add(instrument(V(-R - 0.5, 0.5, 0.3), V(-R, 0.5, 0)));
+
+    var vent = new Emitter(g, { origin: V(0, topY + 1.95, 0), dir: V(0, 1, 0), speed: 2.6, spread: 0.12, jitter: 0.5, gravity: 0.1, color: 0xcfe6ff, size: 0.12, life: 1.1, count: 160, rate: 150 });
+    var burst = new Emitter(g, { origin: V(0, 0, 0), dir: V(0, 0.4, 0), speed: 4.5, spread: R, jitter: 3.0, gravity: -2.0, color: 0xff7a3a, size: 0.16, life: 1.4, count: 260, rate: 0 });
+    var ruptured = false;
+
+    return { group: g, update: function (c) {
+      var col = c.failed ? new THREE.Color(0xff3b3b) : lerpColor(0x2bd4c4, 0xffb020, c.frac);
+      if (c.overTrip && !c.failed) col = lerpColor(0xffb020, 0xff5a3a, (c.frac - 0.8) / 0.2);
+      bodyMat.color.copy(col);
+      bodyMat.opacity = c.failed ? 0.6 : 0.4;
+      bodyMat.emissive.copy(c.failed ? new THREE.Color(0x551010) : new THREE.Color(0x000000));
+      nHub.rotation.x = (-0.75 + 1.5 * Math.min(1, c.frac)) * Math.PI;
+      fv.setFrac(c.feed); vent.active = c.sisActive;
+      if (c.failed && !ruptured) { ruptured = true; burst.burst(); }
+      if (!c.failed) ruptured = false;
+      vent.update(c.dt); burst.update(c.dt);
+    } };
+  }
+
+  function buildReactor() {
+    var g = new THREE.Group();
+    var R = 1.0, cyl = 1.7, headR = 0.7;
+    g.add(latheVessel(R, cyl, headR, M.glass()));
+    var liqMat = std(0x3a7bff, 0.1, 0.3, { transparent: true, opacity: 0.92 });
+    var liquid = latheVessel(R - 0.05, cyl, headR - 0.05, liqMat); g.add(liquid);
+    var jMat = std(0x27c0e0, 0.2, 0.25, { transparent: true, opacity: 0.22, side: THREE.DoubleSide });
+    var jacket = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.22, R + 0.22, cyl + 0.3, 48, 1, true), jMat);
+    g.add(jacket);
+    [-(cyl + 0.3) / 2, (cyl + 0.3) / 2].forEach(function (y) {
+      var ring = new THREE.Mesh(new THREE.TorusGeometry(R + 0.22, 0.04, 10, 48), M.dark());
+      ring.rotation.x = Math.PI / 2; ring.position.y = y; g.add(ring);
+    });
+    var skirt = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.8, R * 0.9, 0.8, 32, 1, true), M.dark());
+    skirt.position.y = -cyl / 2 - headR - 0.4; g.add(skirt);
+
+    var topY = cyl / 2 + headR;
+    var motor = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.5, 20), M.dark());
+    motor.position.y = topY + 0.55; g.add(motor);
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.5), M.base()).translateY(topY + 0.28));
+    var agit = new THREE.Group();
+    var shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, cyl + 0.6, 12), M.steel());
+    shaft.position.y = cyl * 0.05; agit.add(shaft);
+    [0, Math.PI / 2].forEach(function (rot) {
+      var blade = new THREE.Mesh(new THREE.BoxGeometry(R * 1.3, 0.12, 0.16), M.steel());
+      blade.rotation.y = rot; blade.position.y = -cyl / 2 + 0.25; agit.add(blade);
+    });
+    g.add(agit);
+
+    var pm = M.pipe();
+    g.add(tube(V(-3.2, topY + 0.9, 0), V(-0.6, topY + 0.9, 0), 0.08, pm));
+    g.add(tube(V(-0.6, topY + 0.9, 0), V(-0.6, topY + 0.1, 0), 0.08, pm));
+    var rfv = valve(V(-0.6, topY + 0.5, 0), "y"); rfv.setOpen(true); g.add(rfv);
+    g.add(tube(V(0.9, -1.35, 0), V(0.9, -1.75, 0), 0.06, pm));  // bottom product outlet nozzle (-> V-201)
+    var coolMat = std(0x27c0e0, 0.3, 0.3);
+    g.add(tube(V(R + 0.22, -cyl / 2, 0), V(R + 1.1, -cyl / 2, 0), 0.07, coolMat));
+    g.add(tube(V(R + 0.22, cyl / 2, 0), V(R + 1.1, cyl / 2, 0), 0.07, coolMat));
+    g.add(tube(V(R + 1.1, -cyl / 2, 0), V(R + 1.1, cyl / 2, 0), 0.07, coolMat));
+    var cskid = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.7, 0.7), M.base());
+    cskid.position.set(R + 1.6, -cyl / 2, 0); g.add(cskid);
+    g.add(tube(V(R + 1.3, -cyl / 2, 0), V(R + 1.1, -cyl / 2, 0), 0.07, coolMat));
+    var cv = valve(V(R + 0.7, -cyl / 2, 0), "x", "control"); g.add(cv);
+    g.add(instrument(V(-R - 0.5, 0.2, 0.3), V(-R, 0.2, 0)));
+
+    var charge = new Emitter(g, { origin: V(-0.6, topY - 0.1, 0), dir: V(0, -1, 0), speed: 1.1, spread: 0.08, jitter: 0.08, gravity: -1.2, color: 0x8ab4ff, size: 0.06, life: 0.45, count: 40, rate: 45 });
+    var coolFlow = new Emitter(g, { origin: V(R + 1.1, cyl / 2, 0), dir: V(0.3, 1, 0), speed: 1.4, spread: 0.1, jitter: 0.3, gravity: 0.0, color: 0x6fe0f5, size: 0.09, life: 0.8, count: 120, rate: 90 });
+    var vapor = new Emitter(g, { origin: V(0, topY + 0.3, 0), dir: V(0, 1, 0), speed: 2.0, spread: R, jitter: 0.8, gravity: 0.15, color: 0xff8a4a, size: 0.16, life: 1.3, count: 200, rate: 160 });
+    var burst = new Emitter(g, { origin: V(0, 0, 0), dir: V(0, 0.5, 0), speed: 4.2, spread: R, jitter: 3.0, gravity: -1.8, color: 0xff5a2a, size: 0.17, life: 1.5, count: 240, rate: 0 });
+    var ruptured = false;
+
+    return { group: g, update: function (c) {
+      agit.rotation.y += 6.0 * c.dt;
+      var t = Math.min(1, c.frac);
+      var col = t < 0.5 ? lerpColor(0x3a7bff, 0xffb020, t / 0.5) : lerpColor(0xffb020, 0xff2a2a, (t - 0.5) / 0.5);
+      liqMat.color.copy(col); liqMat.emissive.copy(col); liqMat.emissiveIntensity = Math.max(0, (t - 0.35)) * 1.3;
+      var coolPos = c.feed;
+      jMat.opacity = 0.08 + 0.26 * coolPos; jMat.color.copy(lerpColor(0x244a52, 0x37d6f0, coolPos));
+      cv.setFrac(coolPos);
+      charge.active = !c.failed;
+      coolFlow.active = coolPos > 0.02 && !c.failed; coolFlow.rate = 20 + 130 * coolPos;
+      vapor.active = (c.overTrip && !c.failed) || c.failed;
+      if (c.failed && !ruptured) { ruptured = true; burst.burst(); }
+      if (!c.failed) ruptured = false;
+      charge.update(c.dt); coolFlow.update(c.dt); vapor.update(c.dt); burst.update(c.dt);
+    } };
+  }
+
+  // ===================== whole-plant composition =====================
+  var BUILD = { tank: buildTank, reactor: buildReactor, vessel: buildVessel };
+  var UNIT_X = { tank: -8.6, reactor: 0, vessel: 8.6 };
+  var ANCHOR_Y = { tank: 2.1, reactor: 2.6, vessel: 4.9 };  // label anchor above each unit
+
+  var units = {};            // id -> {build result, group, halo, anchor}
+  FLOW.forEach(function (id) {
+    var u = BUILD[id]();
+    u.group.position.x = UNIT_X[id];
+    rig.add(u.group);
+    // attacked-unit highlight: a ring on the skid that glows under attack
+    var haloMat = std(0xff4d4d, 0.1, 0.5, { transparent: true, opacity: 0.0, side: THREE.DoubleSide });
+    var halo = new THREE.Mesh(new THREE.RingGeometry(2.0, 2.45, 48), haloMat);
+    halo.rotation.x = -Math.PI / 2; halo.position.set(UNIT_X[id], -1.97, 0); rig.add(halo);
+    // label anchor (projected to screen each frame)
+    var anchor = new THREE.Object3D(); anchor.position.set(UNIT_X[id], ANCHOR_Y[id], 0); rig.add(anchor);
+    units[id] = { r: u, halo: halo, haloMat: haloMat, anchor: anchor, pulse: 0 };
+  });
+
+  // ---- terminal equipment (the ends of the plant) ----
+  // Head: T-101 is fed from a feed supply (battery limit). Tail: V-201 is a
+  // SEPARATION vessel, so its bottom LIQUID runs down to a product storage tank
+  // (P-401) and its OVERHEAD vapour + PSV relief route to a flare. These two are
+  // cosmetic sinks — NOT in the ODEs (the physics still ends at V-201's
+  // pressure), consistent with "plausible now, validated last".
+  var ptank = new THREE.Group(); ptank.position.set(14.8, 0, 0); rig.add(ptank);
+  (function () {
+    var R = 1.1, H = 2.4, yBot = -1.98;
+    ptank.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 40, 1, true), M.glass()));
+    [yBot, yBot + H].forEach(function (y) {
+      var r = new THREE.Mesh(new THREE.TorusGeometry(R, 0.04, 10, 40), M.dark());
+      r.rotation.x = Math.PI / 2; r.position.y = y; ptank.add(r);
+    });
+    ptank.add(new THREE.Mesh(new THREE.ConeGeometry(R + 0.03, 0.45, 40), M.steel()).translateY(yBot + H + 0.22));
+    ptank.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.06, 40), M.dark()).translateY(yBot));
+    var lh = H * 0.45;  // static product inventory
+    var liq = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.06, R - 0.06, lh, 40),
+      std(0xd9a441, 0.15, 0.35, { transparent: true, opacity: 0.9 }));  // refined product (amber)
+    liq.position.y = yBot + lh / 2; ptank.add(liq);
+    // manual export valve at the outlet so the product tank can be drawn off / emptied
+    var ppm = M.pipe();
+    ptank.add(tube(V(R - 0.1, yBot + 0.15, 0), V(R + 1.1, yBot + 0.15, 0), 0.07, ppm));
+    ptank.add(tube(V(R + 1.1, yBot + 0.15, 0), V(R + 1.1, yBot - 0.08, 0), 0.07, ppm));
+    var xv = valve(V(R + 0.55, yBot + 0.15, 0), "x", ""); xv.setFrac(0.5); ptank.add(xv);
+  })();
+
+  var flare = new THREE.Group(); flare.position.set(18.2, 0, 0); rig.add(flare);
+  var flareFlame;
+  (function () {
+    var fB = -1.98, fTop = 5.0;
+    flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, fTop - fB, 20), M.steel()).translateY((fB + fTop) / 2));
+    flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.22, 0.5, 20), M.dark()).translateY(fTop + 0.15));
+    flareFlame = new Emitter(flare, { origin: V(0, fTop + 0.45, 0), dir: V(0, 1, 0), speed: 2.4, spread: 0.3, jitter: 0.5, gravity: 0.35, color: 0xff9a3a, size: 0.2, life: 0.8, count: 120, rate: 70 });
+    flareFlame.active = true;  // pilot always lit
+  })();
+
+  // ---- interconnecting pipe-runs (what makes it ONE plant) ----
+  // Each is an elbowed pipe-run that LANDS on both units' nozzles, with
+  // directional flow "slugs" sliding along its whole length. A run warms + speeds
+  // up when its coupling is active (an upstream disturbance propagating down).
+  function connector(points, baseColor, opts) {
+    opts = opts || {};
+    var g = new THREE.Group(); rig.add(g);
+    var pm = M.pipe(), r = opts.r || 0.08, segs = [], total = 0, i;
+    for (i = 0; i < points.length - 1; i++) {
+      g.add(tube(points[i], points[i + 1], r, pm));
+      var len = points[i].distanceTo(points[i + 1]);
+      segs.push({ a: points[i], b: points[i + 1], len: len }); total += len;
+    }
+    for (i = 0; i < points.length; i++) {   // elbow joints
+      var e = new THREE.Mesh(new THREE.SphereGeometry(r * 1.3, 10, 8), pm);
+      e.position.copy(points[i]); g.add(e);
+    }
+    function at(t) {                          // point at arclength fraction t
+      var d = t * total;
+      for (var k = 0; k < segs.length; k++) {
+        if (d <= segs[k].len || k === segs.length - 1) {
+          var f = segs[k].len > 0 ? Math.min(1, d / segs[k].len) : 0;
+          return new THREE.Vector3().lerpVectors(segs[k].a, segs[k].b, f);
+        }
+        d -= segs[k].len;
+      }
+      return segs[segs.length - 1].b.clone();
+    }
+    var slugs = [], slugMat = null, withFlow = opts.flow !== false;
+    if (withFlow) {
+      slugMat = std(baseColor, 0.2, 0.3, { emissive: baseColor, emissiveIntensity: 0.6 });
+      var N = opts.n || Math.max(4, Math.round(total * 1.0));
+      for (i = 0; i < N; i++) {
+        var s = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), slugMat);
+        s.userData.t = i / N; g.add(s); slugs.push(s);
+      }
+    }
+    return {
+      mid: at(opts.midT == null ? 0.5 : opts.midT),
+      update: function (speed, active, dt) {
+        if (!withFlow) return;
+        slugMat.color.copy(lerpColor(baseColor, 0xff6a3a, active ? 1 : 0));
+        slugMat.emissive.copy(lerpColor(baseColor, 0xff6a3a, active ? 1 : 0));
+        slugMat.emissiveIntensity = active ? 1.1 : 0.55;
+        for (var j = 0; j < slugs.length; j++) {
+          var s = slugs[j];
+          s.userData.t += speed * (active ? 1.8 : 1.0) * dt;
+          if (s.userData.t > 1) s.userData.t -= 1;
+          s.position.copy(at(s.userData.t));
+        }
+      }
+    };
+  }
+
+  var cFeed = connector([V(-14.6, -0.6, 0), V(-13.0, -0.6, 0)], 0x5a9bff, { n: 3 });                    // supply -> T-101
+  var feedValve = valve(V(-13.8, -0.6, 0), "x", "control"); rig.add(feedValve);                         // crude fill valve (head of T-101)
+  var cTR   = connector([V(-5.95, -0.15, 0), V(-5.95, 2.45, 0), V(-3.2, 2.45, 0)], 0x6fd0f5, { midT: 0.78 }); // T-101 bottom -> R-301 feed
+  var cRV   = connector([V(0.9, -1.75, 0), V(4.5, -1.75, 0), V(4.5, -0.9, 0)], 0x8ab4ff, { midT: 0.42 });     // R-301 product -> V-201 feed
+  var cProd = connector([V(10.7, -2.3, 0), V(10.7, -1.3, 0), V(13.6, -1.3, 0)], 0x7fe0c0, { midT: 0.7 });     // V-201 bottoms -> P-401
+  connector([V(8.6, 3.7, 0), V(8.6, 4.4, 0), V(18.2, 4.4, 0), V(18.2, 5.0, 0)], 0xff9a3a, { flow: false, r: 0.06 }); // V-201 overhead/relief -> flare
+
+  // terminal-equipment label anchors (projected like the units)
+  var pAnchor = new THREE.Object3D(); pAnchor.position.set(14.8, 1.5, 0); rig.add(pAnchor);
+  var fAnchor = new THREE.Object3D(); fAnchor.position.set(18.2, 5.8, 0); rig.add(fAnchor);
+
+  // ---- render loop ----
+  var clock = new THREE.Clock();
+  function resize() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", resize);
+
+  var CTX = {};            // id -> latest ctx from the server
+  var COUP = { tank_reactor: false, reactor_vessel: false };
+  var FEED = { tank: 0.4, reactor: 0.5, vessel: 0.2 };
+  var tSway = 0;
+  function animate() {
+    requestAnimationFrame(animate);
+    var dt = Math.min(0.05, clock.getDelta());
+    tSway += dt;
+    rig.rotation.y = Math.sin(tSway * 0.12) * 0.14;   // gentle sway, keeps the train readable
+
+    FLOW.forEach(function (id) {
+      var u = units[id], c = CTX[id];
+      if (c) { c.dt = dt; u.r.update(c); }
+      // highlight pulse under the attacked unit
+      var target = (c && c.attacked) ? (c.failed ? 0.6 : 0.42) : 0.0;
+      u.pulse += dt * 2.2;
+      var amp = target > 0 ? target * (0.7 + 0.3 * Math.sin(u.pulse * 2.0)) : 0;
+      u.haloMat.opacity += (amp - u.haloMat.opacity) * Math.min(1, dt * 6);
+      u.haloMat.color.copy((c && c.failed) ? new THREE.Color(0xff3b3b) : new THREE.Color(0xff6a4a));
+    });
+
+    // interconnect flows: base throughput + active coupling highlight
+    cFeed.update(0.12 + 0.3 * FEED.tank, false, dt);
+    cTR.update(0.10 + 0.3 * FEED.tank, COUP.tank_reactor, dt);
+    cRV.update(0.16, COUP.reactor_vessel, dt);
+    cProd.update(0.14, false, dt);
+    feedValve.setFrac(FEED.tank);   // crude fill valve tracks the tank's feed
+    flareFlame.update(dt);
+
+    resize(); renderer.render(scene, camera);
+    positionLabels();
+  }
+
+  // ===================== HMI strip + ground-truth labels =====================
+  var el = function (id) { return document.getElementById(id); };
+  var strip = el("hmiStrip"), labels = el("labels");
+  var clockEl = el("clock"), chip = el("attackChip"), legendTail = el("legendTail");
+  var btnAttack = el("btnAttack"), btnStand = el("btnStand"), btnReset = el("btnReset");
+  var unitSel = el("unitSel"), spOnly = el("spOnly"), rupture = el("rupture");
+
+  var tiles = {}, labEls = {}, flowEls = {}, staticLabels = [], built = false;
+  function dp(u) { return u === "°C" ? 1 : 3; }
+
+  function buildStrip(st) {
+    strip.innerHTML = ""; labels.innerHTML = "";
+    FLOW.forEach(function (id) {
+      var m = st.units[id];
+      var tile = document.createElement("div"); tile.className = "tile"; tile.dataset.id = id;
+      tile.innerHTML =
+        '<div class="minigauge"><div class="fill"></div>' +
+        '<div class="mark trip"></div><div class="mark sp"></div></div>' +
+        '<div class="tbody">' +
+        '<div class="tag"><b>' + m.tag + '</b> · ' + m.title + '</div>' +
+        '<div class="big"><span class="v">—</span> <span>' + m.pv_units + '</span></div>' +
+        '<div class="lamp ok"><span class="dot"></span><span class="lt">SIS ARMED</span></div>' +
+        '<div class="sp"></div></div>';
+      strip.appendChild(tile);
+      tiles[id] = {
+        tile: tile, fill: tile.querySelector(".fill"),
+        trip: tile.querySelector(".mark.trip"), sp: tile.querySelector(".mark.sp"),
+        v: tile.querySelector(".v"), lamp: tile.querySelector(".lamp"),
+        lt: tile.querySelector(".lt"), spn: tile.querySelector(".sp"),
+      };
+      tiles[id].trip.style.bottom = (m.trip_frac * 100).toFixed(1) + "%";
+      tiles[id].sp.style.bottom = (m.sp_frac * 100).toFixed(1) + "%";
+
+      var lab = document.createElement("div"); lab.className = "lab";
+      lab.innerHTML = '<div class="t"><b>' + m.tag + '</b> ' + m.pv_name + '</div>' +
+                      '<div class="v">—</div><div class="s"></div>';
+      labels.appendChild(lab);
+      labEls[id] = { el: lab, v: lab.querySelector(".v"), s: lab.querySelector(".s") };
+    });
+    // terminal-equipment labels (projected like units)
+    [[pAnchor, "<b>P-401</b> product storage", "#7fe0c0"],
+     [fAnchor, "flare", "#ff9a3a"]].forEach(function (p) {
+      var d = document.createElement("div"); d.className = "lab";
+      d.innerHTML = '<div class="t">' + p[1] + '</div>';
+      d.querySelector(".t").style.color = p[2];
+      labels.appendChild(d); staticLabels.push({ anchor: p[0], el: d });
+    });
+    // interconnect flow labels
+    [["feed", "feed"], ["tr", "feed → reactor"], ["rv", "product → vessel"],
+     ["prod", "→ storage"]].forEach(function (p) {
+      var f = document.createElement("div"); f.className = "flowlabel"; f.textContent = p[1];
+      labels.appendChild(f); flowEls[p[0]] = f;
+    });
+    built = true;
+  }
+
+  var _proj = new THREE.Vector3();
+  function projectTo(obj) {
+    obj.getWorldPosition(_proj); _proj.project(camera);
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    return { x: (_proj.x * 0.5 + 0.5) * w, y: (-_proj.y * 0.5 + 0.5) * h, vis: _proj.z < 1 };
+  }
+  function projMid(mid) {
+    return projectTo({ getWorldPosition: function (v) { return v.copy(mid).applyMatrix4(rig.matrixWorld); } });
+  }
+  function positionLabels() {
+    if (!built) return;
+    FLOW.forEach(function (id) {
+      var p = projectTo(units[id].anchor), L = labEls[id].el;
+      L.style.left = p.x + "px"; L.style.top = p.y + "px"; L.style.opacity = p.vis ? 1 : 0;
+    });
+    staticLabels.forEach(function (sl) {
+      var p = projectTo(sl.anchor);
+      sl.el.style.left = p.x + "px"; sl.el.style.top = p.y + "px"; sl.el.style.opacity = p.vis ? 1 : 0;
+    });
+    [["feed", cFeed], ["tr", cTR], ["rv", cRV], ["prod", cProd]].forEach(function (p) {
+      var q = projMid(p[1].mid);
+      flowEls[p[0]].style.left = q.x + "px"; flowEls[p[0]].style.top = q.y + "px";
+      flowEls[p[0]].style.opacity = q.vis ? 1 : 0;
+    });
+  }
+
+  function render(st) {
+    if (!built) buildStrip(st);
+    clockEl.textContent = "t = " + st.time.toFixed(1) + " s";
+    COUP.tank_reactor = st.couplings.tank_reactor.active;
+    COUP.reactor_vessel = st.couplings.reactor_vessel.active;
+
+    // attack chip + legend
+    var tgt = st.target;
+    chip.textContent = st.any_attacked
+      ? "attack: ACTIVE" + (tgt ? " on " + st.units[tgt].tag : "")
+      : "attack: inactive";
+    chip.style.color = st.any_attacked ? "#ff8b8b" : "#8aa0b5";
+
+    var anyFail = false, failWord = "";
+    FLOW.forEach(function (id) {
+      var m = st.units[id], T = tiles[id], Lb = labEls[id], u = m.pv_units, d = dp(u);
+      // ---- HMI tile (spoofable: SIS-reported PV + trip) ----
+      var tripped = m.hmi.trip_status;
+      T.v.textContent = m.hmi.pv.toFixed(d);
+      T.fill.style.height = (m.hmi.fraction * 100).toFixed(1) + "%";
+      T.fill.style.background = tripped ? "var(--red)" : "var(--green)";
+      T.lamp.className = "lamp " + (tripped ? "trip" : "ok");
+      T.lt.textContent = tripped ? "SIS TRIPPED" : "SIS ARMED";
+      T.tile.className = "tile" + (m.attacked ? " attacked" : "");
+      var spTamp = m.setpoint_tampered;
+      T.spn.innerHTML = "SP <b style='color:" + (spTamp ? "#ff8b8b" : "#aeb9c6") + "'>" +
+        m.setpoint_now.toFixed(d) + " " + u + "</b>" + (spTamp ? " ⚠ forced" : "");
+      T.sp.style.bottom = (Math.min(1, m.setpoint_frac) * 100).toFixed(1) + "%";
+      T.sp.style.borderTopColor = spTamp ? "var(--red)" : "#6b7c90";
+
+      // ---- ground-truth label (unspoofable: physics PV) ----
+      var tru = m.truth, status = tru.failed ? m.failure_word
+        : (m.trip ? "SIS TRIP" : (tru.pv >= m.trip_hh ? "OVER TRIP" : "nominal"));
+      var scol = tru.failed ? "#ff6a6a" : (m.trip ? "#27d07a" : (tru.pv >= m.trip_hh ? "#ffb020" : "#8aa0b5"));
+      Lb.v.textContent = tru.pv.toFixed(d) + " " + u;
+      Lb.v.style.color = tru.failed ? "#ff6a6a" : (m.attacked ? "#ffd3d3" : "#e7edf5");
+      Lb.s.textContent = status; Lb.s.style.color = scol;
+      if (tru.failed) { anyFail = true; failWord = m.tag + " " + m.failure_word; }
+
+      FEED[id] = m.feed;
+      // ctx handed to the 3D unit updater each frame
+      CTX[id] = { frac: tru.fraction, pv: tru.pv, overTrip: tru.pv >= m.trip_hh,
+                  failed: tru.failed, feed: m.feed, sisActive: m.trip,
+                  attacked: m.attacked, dt: 0.016 };
+    });
+
+    rupture.className = "rupture" + (anyFail ? " on" : "");
+    rupture.textContent = "● " + failWord + " — true process past failure; operator HMI still green ●";
+  }
+
+  function poll() {
+    fetch("/api/state").then(function (r) { return r.json(); }).then(render).catch(function () {});
+  }
+
+  btnAttack.onclick = function () {
+    fetch("/api/attack", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit: unitSel.value, setpoint_only: spOnly.checked }) });
+  };
+  btnStand.onclick = function () {
+    fetch("/api/standdown", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ unit: unitSel.value }) });
+  };
+  btnReset.onclick = function () { fetch("/api/reset", { method: "POST" }); };
+
+  animate();
+  setInterval(poll, 200); poll();
+})();
+</script>
+</body>
+</html>

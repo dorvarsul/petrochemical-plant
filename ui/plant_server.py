@@ -1,0 +1,253 @@
+"""PetroTwin whole-plant server (Phase 2) — the entire connected flowsheet.
+
+Where ``ui/server.py`` drives ONE unit against the live OpenPLC pair, this
+server runs the **connected plant** (T-101 feed tank -> R-301 reactor -> V-201
+vessel) through the dependency-free ``PlantBridge`` (one in-memory BPCS + SIS
+per unit) and serves a single dashboard that shows **all three units at once**:
+
+  * ``truth`` per unit comes from the physics (the 3D view) — unspoofable.
+  * ``hmi``   per unit comes from that unit's SIS registers — spoofable.
+
+The operator can attack ANY ONE unit (malicious BPCS setpoint + SIS_OVERRIDE,
+or setpoint-only for the defence-in-depth contrast); the whole plant keeps
+running around it and the forward couplings propagate the disturbance
+downstream — exactly the Phase-1 story, now watchable as one flowsheet.
+
+All plant/Modbus access stays in the one background thread; HTTP handlers only
+read the latest snapshot and set flags, so there is no concurrency on the bridge.
+
+Run (needs only the venv — no Docker/OpenPLC):
+    .venv/bin/python -m ui.plant_server
+then open http://127.0.0.1:8092/
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from bridge.plant_bridge import make_fake_plant_bridge
+from physics.plant import FLOW
+
+STATIC = Path(__file__).parent / "static"
+HOST, PORT = "127.0.0.1", 8092
+DT, SETTLE = 1.0, 0.12      # sim-seconds per step / real-seconds between steps
+EPS_COUPLING = 1e-3         # a coupling above this reads as "active" (propagating);
+                            # above baseline integrator residual, below real drive
+
+
+def _unit_meta(sc) -> dict:
+    """Static per-unit labels/units/thresholds the dashboard renders generically."""
+    return {
+        "id": sc.id, "title": sc.title, "tag": sc.unit_tag,
+        "pv_name": sc.pv_name, "pv_units": sc.pv_units, "pv_symbol": sc.pv_symbol,
+        "setpoint": sc.setpoint, "trip_hh": sc.trip_hh, "fail_at": sc.fail_at,
+        "trip_frac": round(sc.fraction(sc.trip_hh), 4),
+        "sp_frac": round(sc.fraction(sc.setpoint), 4),
+        "failure_word": sc.failure_word, "actuator": sc.actuator,
+        "trip_action": sc.trip_action,
+    }
+
+
+class PlantRunner(threading.Thread):
+    """Steps the connected plant forever; applies attack/reset flags in-thread."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self._lock = threading.Lock()
+        self._pending = []          # queued (verb, unit, setpoint_only) requests
+        self._reset = False
+        self._stop = False
+        self.bridge = make_fake_plant_bridge(dt=DT)
+        # which unit the LAST attack request targeted (headline only); external
+        # attacks still surface per-unit via each unit's `attacked` flag.
+        self._target = None
+        # frozen HMI value captured at the moment each unit is attacked, so the
+        # dashboard can show the spoof gap against the value the operator saw.
+        self._frozen = {}
+        self._snap = self._build_snapshot(status="running")
+
+    # --- control surface (called from HTTP handlers) ----------------------
+    def request_attack(self, unit, setpoint_only=False):
+        if unit not in FLOW:
+            return False
+        with self._lock:
+            self._pending.append(("attack", unit, bool(setpoint_only)))
+        return True
+
+    def request_standdown(self, unit):
+        if unit not in FLOW:
+            return False
+        with self._lock:
+            self._pending.append(("standdown", unit, False))
+        return True
+
+    def request_reset(self):
+        with self._lock:
+            self._reset = True
+
+    def snapshot(self):
+        with self._lock:
+            return dict(self._snap)
+
+    # --- snapshot assembly -------------------------------------------------
+    def _build_snapshot(self, status, sample=None):
+        units = {}
+        any_attacked = False
+        for uid in FLOW:
+            m = self.bridge.plant.unit(uid)
+            sc = m.scenario
+            meta = _unit_meta(sc)
+            if sample is not None:
+                u = sample.units[uid]
+                setpoint_now = u.setpoint
+                sp_tampered = abs(setpoint_now - sc.setpoint) > 0.5 / sc.reg_scale
+                attacked = bool(u.override or sp_tampered)
+                any_attacked = any_attacked or attacked
+                meta.update({
+                    "truth": {"pv": round(u.true_pv, 3),
+                              "fraction": round(sc.fraction(u.true_pv), 4),
+                              "failed": u.failed},
+                    "hmi": {"pv": round(u.hmi_pv, 3),
+                            "fraction": round(sc.fraction(u.hmi_pv), 4),
+                            "trip_status": u.hmi_trip_status},
+                    "feed": round(u.feed, 3),
+                    "trip": u.trip_cmd,
+                    "setpoint_now": round(setpoint_now, 3),
+                    "setpoint_frac": round(sc.fraction(setpoint_now), 4),
+                    "setpoint_tampered": sp_tampered,
+                    "override": bool(u.override),
+                    "attacked": attacked,
+                    "divergence": round(u.divergence, 3),
+                    "frozen_hmi": self._frozen.get(uid),
+                })
+            else:
+                f0 = sc.fraction(sc.pv0)
+                meta.update({
+                    "truth": {"pv": sc.pv0, "fraction": round(f0, 4), "failed": False},
+                    "hmi": {"pv": sc.pv0, "fraction": round(f0, 4), "trip_status": False},
+                    "feed": 0.0, "trip": False,
+                    "setpoint_now": sc.setpoint, "setpoint_frac": round(f0, 4),
+                    "setpoint_tampered": False, "override": False,
+                    "attacked": False, "divergence": 0.0, "frozen_hmi": None,
+                })
+            units[uid] = meta
+
+        q = sample.q_coupling if sample else 0.0
+        p = sample.p_coupling if sample else 0.0
+        return {
+            "status": status,
+            "time": round(sample.time, 1) if sample else 0.0,
+            "flow": list(FLOW),
+            "target": self._target,
+            "any_attacked": any_attacked,
+            "couplings": {
+                "tank_reactor": {"value": round(q, 6), "active": q > EPS_COUPLING},
+                "reactor_vessel": {"value": round(p, 6), "active": p > EPS_COUPLING},
+            },
+            "units": units,
+        }
+
+    def _apply_pending(self):
+        with self._lock:
+            pending, self._pending = self._pending, []
+        for verb, unit, setpoint_only in pending:
+            if verb == "attack":
+                # Capture the HMI value the operator will be frozen at, then inject.
+                self._frozen[unit] = round(self.bridge.hmi_pv(unit), 3)
+                self.bridge.attack(unit, setpoint_only=setpoint_only)
+                self._target = unit
+            elif verb == "standdown":
+                self.bridge.stand_down(unit)
+                self._frozen.pop(unit, None)
+                if self._target == unit:
+                    self._target = None
+
+    def run(self):
+        while not self._stop:
+            if self._reset:
+                with self._lock:
+                    self._reset = False
+                    self._pending = []
+                # A fresh bridge clears every latched PLC state + couplings.
+                self.bridge = make_fake_plant_bridge(dt=DT)
+                self._target = None
+                self._frozen = {}
+                with self._lock:
+                    self._snap = self._build_snapshot(status="running")
+                continue
+            self._apply_pending()
+            sample = self.bridge.step()
+            snap = self._build_snapshot(status="running", sample=sample)
+            with self._lock:
+                self._snap = snap
+            time.sleep(SETTLE)
+
+
+RUNNER: PlantRunner | None = None
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype):
+        data = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _json_body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, TypeError):
+            return {}
+
+    def do_GET(self):
+        if self.path in ("/", "/plant", "/index.html"):
+            try:
+                self._send(200, (STATIC / "plant.html").read_bytes(),
+                           "text/html; charset=utf-8")
+            except OSError:
+                self._send(500, "plant.html missing", "text/plain")
+        elif self.path.startswith("/api/state"):
+            self._send(200, json.dumps(RUNNER.snapshot()), "application/json")
+        else:
+            self._send(404, "not found", "text/plain")
+
+    def do_POST(self):
+        if self.path.startswith("/api/attack"):
+            body = self._json_body()
+            ok = RUNNER.request_attack(body.get("unit", ""),
+                                       body.get("setpoint_only", False))
+            self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
+        elif self.path.startswith("/api/standdown"):
+            ok = RUNNER.request_standdown(self._json_body().get("unit", ""))
+            self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
+        elif self.path.startswith("/api/reset"):
+            RUNNER.request_reset()
+            self._send(200, json.dumps({"ok": True}), "application/json")
+        else:
+            self._send(404, "not found", "text/plain")
+
+    def log_message(self, *args):
+        pass  # quiet
+
+
+def main():
+    global RUNNER
+    RUNNER = PlantRunner()
+    RUNNER.start()
+    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"PetroTwin whole-plant view on http://{HOST}:{PORT}/  (Ctrl-C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

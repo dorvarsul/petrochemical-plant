@@ -134,9 +134,18 @@ one SIS per unit; no Docker). Each criterion below must hold:
 The couplings are **plausible, hand-tuned, not validated** — the gains make an
 upstream attack visibly move its neighbour without instantly destroying it, not
 fitted to plant data. Validated connected physics is the final OpenModelica phase
-(`ROADMAP.md`). The LIVE OpenPLC multi-unit stack (three BPCS+SIS pairs over
-Modbus) and the whole-plant visualization are Phase 2; Phase 1 acceptance runs on
-the in-memory PLCs, exactly as the Phase-0.5 acceptance does (§5).
+(`ROADMAP.md`). Phase 1 acceptance runs on the in-memory PLCs, exactly as the
+Phase-0.5 acceptance does (§5).
+
+The **whole-plant visualization** (Phase 2) is now implemented on that same
+in-memory-PLC path: `python3 -m ui.plant_server` (port 8092) serves a live view
+in which all seven criteria above are *watchable* as one flowsheet — a spoofable
+per-unit HMI tile strip (each polled from that unit's SIS) over one unspoofable
+3D ground-truth train (T-101 → R-301 → V-201), with the attacked unit
+highlighted and the forward couplings animated as the interconnecting streams.
+Attack any unit from the page (full attack, or the setpoint-only defence-in-depth
+contrast). The LIVE OpenPLC multi-unit stack (three BPCS+SIS pairs over Modbus)
+remains the rest of Phase 2.
 
 ## Scope note
 

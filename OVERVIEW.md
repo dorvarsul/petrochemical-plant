@@ -89,8 +89,11 @@ continuously-running plant** — `T-101` feed tank → `R-301` reactor → `V-20
 separation vessel, with forward-coupled streams (an overfilling tank warms the
 reactor; a runaway reactor pressurises the vessel) — so each scenario becomes
 **the unit the attack targets** inside the same flowsheet. This runs today on the
-Python + in-memory-PLC path (`physics/plant.py`, `bridge/run_plant_demo.py`); the
-whole-plant *visualization* and the live OpenPLC multi-unit stack are Phase 2.
+Python + in-memory-PLC path (`physics/plant.py`, `bridge/run_plant_demo.py`). The
+whole-plant *visualization* is now implemented on that same path
+(`python3 -m ui.plant_server` — a live view of the entire flowsheet: a spoofable
+per-unit HMI strip over one unspoofable 3D ground-truth train); the live OpenPLC
+multi-unit stack remains Phase 2.
 Validated physics (OpenModelica, real geometry, relief sizing) is the **final**
 phase, dropped in behind the unchanged physics interface — plausible now,
 validated last. The reactor model in particular is tuned for a legible runaway,

@@ -34,11 +34,22 @@ plant fidelity (OpenModelica realism is a later phase).
 
 ### Offline — no Docker (pure stdlib)
 ```bash
-python3 -m unittest discover -s tests          # 68 tests
+python3 -m unittest discover -s tests          # 89 tests (3 live-Modbus skipped)
 python3 -m bridge.run_fake_demo                # tank (default)
 python3 -m bridge.run_fake_demo vessel         # or vessel / reactor
 python3 -m bridge.run_fake_demo reactor        # normal -> attack -> failure, HMI frozen
 ```
+
+**Connected plant (Phase 1–2), no Docker.** The three units wired into one
+flowsheet (T-101 → R-301 → V-201, forward-coupled), on the fake-PLC path:
+```bash
+python3 -m bridge.run_plant_demo reactor       # terminal: attack one unit, watch the plant respond
+./run_plant.sh start                           # whole-plant view: http://127.0.0.1:8092
+./run_plant.sh stop                            # (start|stop|restart|status; or: python -m ui.plant_server)
+```
+The whole-plant view shows a spoofable per-unit HMI strip over one unspoofable
+3D ground-truth train; attack any unit and watch it run to failure while its HMI
+tile stays green and the forward couplings carry the disturbance downstream.
 
 ### Live — Docker + real OpenPLC + the dashboard
 ```bash
@@ -86,7 +97,8 @@ plc/          bpcs.st (setpoint-control template), sis.st (trip template), load_
               docker-compose (OpenPLC v3)   + tests/test_plc_programs.py
 bridge/       scenario-agnostic Modbus bridge loop; fake + real PLC clients; demos
               + tests/test_bridge.py (fake) / test_bridge_live.py (real, opt-in)
-ui/           server.py + static/dashboard.html (HMI + Three.js full-process 3D, selector)
+ui/           server.py + static/dashboard.html (single-unit live HMI + Three.js, selector)
+              plant_server.py + static/plant.html (whole connected-plant view, fake PLCs)
 attack/       attack.py — external Modbus attacker: force BPCS setpoint + SIS_OVERRIDE
 ```
 
