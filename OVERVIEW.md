@@ -60,11 +60,13 @@ A live run looks like this:
 1. **Baseline operation** — the Control PLC holds the process at its setpoint, the
    Safety PLC is armed, HMI green, 3D stable. With no attacker this runs forever and
    never trips.
-2. **Attack injected (external, over Modbus)** — the attacker writes a malicious
-   setpoint to the **Control PLC** so its loop drives the process toward failure,
-   **and** overrides the **Safety PLC**'s trip/interlock (which also freezes the data
-   it feeds the HMI at nominal). The setpoint manipulation alone would be caught by
-   the healthy SIS; defeating the SIS is what lets it reach failure.
+2. **Attack injected (external, over Modbus)** — the attacker flips the **Control
+   PLC** to MANUAL and drives its actuator to the extreme so the process heads
+   toward failure, **and** bypasses the **Safety PLC**'s trip/interlock (which also
+   freezes the data it feeds the HMI at nominal). (The Control PLC now clamps an
+   out-of-range setpoint, so the older off-scale-setpoint trick is caught — hence
+   the MANUAL-mode driver.) The actuator drive alone would be caught by the healthy
+   SIS; bypassing the SIS is what lets it reach failure.
 3. **Divergence** — the HMI **stays green** (spoofed/frozen) while the **3D view
    shows the process running away to failure**.
 

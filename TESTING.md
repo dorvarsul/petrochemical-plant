@@ -35,11 +35,15 @@ Tested per OpenPLC instance against its IEC 61131-3 logic.
 - **Hysteresis / latch.** Once tripped, the SIS stays tripped (or follows the defined
   reset rule) rather than chattering around the limit.
 - **Control PLC (BPCS) — setpoint behaviour.** The proportional control loop drives
-  the actuator to hold the PV at its writable setpoint under normal inputs (and the
-  signed gain means the reactor's coolant valve opens as it heats); it does **not**
-  perform the safety trip (that is the SIS's job) — confirming the two-PLC
-  separation. A malicious setpoint saturates the actuator toward failure, which the
-  bridge tests exercise both with the SIS armed (caught) and defeated (fails).
+  the actuator to hold the PV at its writable, **clamped** setpoint under normal
+  inputs (and the signed gain means the reactor's coolant valve opens as it heats);
+  it does **not** perform the safety trip (that is the SIS's job) — confirming the
+  two-PLC separation. The setpoint **clamp** (`[SP_LO, SP_HI]`) neutralises a naive
+  off-scale-setpoint attack; the evolved attack therefore uses **MANUAL mode**
+  (`BPCS_MAN_MODE` + `BPCS_MAN_OUT`) to drive the actuator to failure, which the
+  bridge tests exercise both with the SIS armed (caught) and bypassed (fails).
+  Additional unit tests cover the AUTO/MANUAL bumpless transfer, the output rate
+  limit, and the SIS pre-alarm / bad-PV / deadband-gated reset / block-valve logic.
 
 Pass = trip asserts exactly at threshold with correct actuator; BPCS holds setpoint
 and does not substitute for the SIS.
@@ -87,10 +91,11 @@ A–G criteria below. `bridge.run_fake_demo <scenario>` and `bridge.run_live_dem
 1. **Baseline.** Start physics, both PLCs, bridge, HMI, 3D view. The BPCS holds the
    process at its setpoint; SIS armed; HMI nominal (green); 3D stable. 3D value
    tracks HMI value, and with no attacker it stays there indefinitely (never trips).
-2. **Attack.** Run the external attack script: write a malicious `BPCS_SETPOINT`
-   (drives the process) and set `SIS_OVERRIDE` (suppress the trip + freeze the
-   HMI-polled registers). (Setpoint-only, with the SIS left armed, is also tested and
-   must be caught by the healthy SIS.)
+2. **Attack.** Run the external attack script: flip `BPCS_MAN_MODE` and drive
+   `BPCS_MAN_OUT` to the extreme (drives the process) and set `SIS_OVERRIDE` (suppress
+   the trip + freeze the HMI-polled registers). (Manual-drive with the SIS left armed
+   is also tested and must be caught by the healthy SIS; a naive setpoint tamper is
+   tested to confirm the clamp neutralises it — no failure.)
 3. **Divergence.** Physics continues integrating true state. The protective action
    never fires. The true variable crosses the **failure threshold**; the 3D view shows
    the process going to failure (rupture/overflow/runaway) — while the HMI **stays
@@ -125,11 +130,11 @@ one SIS per unit; no Docker). Each criterion below must hold:
 |---|-----------|---------------|
 | P1 | **Connected steady state.** With no attacker, every unit holds near its setpoint and no SIS trips, indefinitely. | All three hold; zero trips |
 | P2 | **Baseline-zero couplings.** At the operating point every forward coupling is zero (so steady state is exact, not a balance of disturbances). | `q_coupling == p_coupling == 0` at setpoint |
-| P3 | **Targeted failure.** Attacking one unit (malicious setpoint + `SIS_OVERRIDE`) drives THAT unit past its failure threshold while its HMI stays frozen/armed (large spoof gap). | Target fails; HMI frozen; gap > 0.4·fail_at |
+| P3 | **Targeted failure.** Attacking one unit (MANUAL drive + `SIS_OVERRIDE`) drives THAT unit past its failure threshold while its HMI stays frozen/armed (large spoof gap). | Target fails; HMI frozen; gap > 0.4·fail_at |
 | P4 | **No neighbour failure.** The up/downstream units do not fail during a single-unit attack. | Only the target reaches failure |
 | P5 | **Forward coupling.** An upstream attack visibly moves its downstream neighbour (overfilled tank warms the reactor; runaway reactor pressurises the vessel); a downstream attack leaves upstream units undisturbed (no back-pressure in Phase 1). | Downstream responds; upstream static |
 | P6 | **Neighbour defence-in-depth.** When a reactor runaway pressurises the vessel, the vessel's own HEALTHY SIS trips and its relief holds it safe — even though the attacked unit's SIS is overridden. | Neighbour SIS trips, holds < rupture |
-| P7 | **Healthy-SIS contrast.** A setpoint-only attack (SIS left armed) is caught: the targeted unit trips and is held safe. | Target does not fail |
+| P7 | **Healthy-SIS contrast.** A manual-drive attack with the SIS left armed is caught: the targeted unit trips and is held safe. | Target does not fail |
 
 The couplings are **plausible, hand-tuned, not validated** — the gains make an
 upstream attack visibly move its neighbour without instantly destroying it, not
@@ -143,9 +148,11 @@ in which all seven criteria above are *watchable* as one flowsheet — a spoofab
 per-unit HMI tile strip (each polled from that unit's SIS) over one unspoofable
 3D ground-truth train (T-101 → R-301 → V-201), with the attacked unit
 highlighted and the forward couplings animated as the interconnecting streams.
-Attack any unit from the page (full attack, or the setpoint-only defence-in-depth
-contrast). The LIVE OpenPLC multi-unit stack (three BPCS+SIS pairs over Modbus)
-remains the rest of Phase 2.
+Attack any unit from the page (full attack, or the manual-drive-with-SIS-armed
+defence-in-depth contrast), toggle the FILL/EXPORT valves, and reset a latched
+trip; the HMI tiles carry mode/alarm/bypass chips and a live P-401 level. The LIVE
+OpenPLC multi-unit stack (three BPCS+SIS pairs over Modbus) remains the rest of
+Phase 2.
 
 ## Scope note
 

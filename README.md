@@ -76,16 +76,22 @@ The dashboard loads the chosen scenario's PLC programs itself (step 2 is for the
 terminal demo / tests); its dropdown switches scenarios live by recompiling the PLCs.
 
 **Baseline vs. attack.** With no attacker the BPCS holds the process at its safe
-setpoint and the SIS never trips — the baseline just runs. The attack is external,
-over Modbus: it writes a malicious control setpoint to the BPCS (driving the process
-toward failure) **and** overrides the SIS (suppressing the trip and freezing the
-HMI). Launch it from the CLI (or the dashboard's "Inject attack" button, which makes
-the same writes):
+setpoint and the SIS never trips — the baseline just runs. The BPCS now **clamps**
+an out-of-range setpoint, so the old off-scale-setpoint attack is neutralised; the
+evolved attack instead flips the BPCS to **MANUAL** and drives the actuator output
+directly (feed wide open / coolant shut) **and** sets the SIS bypass (suppressing
+the trip and freezing the HMI). Launch it from the CLI (or the dashboard's "Inject
+attack" button, which makes the same writes):
 ```bash
-.venv/bin/python -m attack.attack reactor            # force setpoint + SIS_OVERRIDE
-.venv/bin/python -m attack.attack reactor --setpoint-only  # only the setpoint (SIS catches it)
-.venv/bin/python -m attack.attack reactor --reset    # stand down (restore setpoint, clear override)
+.venv/bin/python -m attack.attack reactor               # MANUAL drive + SIS bypass (full)
+.venv/bin/python -m attack.attack reactor --no-bypass   # MANUAL drive, SIS left armed (caught)
+.venv/bin/python -m attack.attack reactor --setpoint-only  # naive setpoint tamper (clamped -> caught)
+.venv/bin/python -m attack.attack reactor --reset       # stand down (AUTO, clear bypass, pulse SIS reset)
 ```
+The whole-plant view adds a **"leave SIS armed"** checkbox (the defense-in-depth
+contrast), a **"Reset SIS"** button, clickable **FILL / EXPORT** valves (real PLC
+coils), per-unit HMI alarm chips (AUTO/MANUAL, SIS BYPASS, PV BAD, SP CLAMPED, H,
+PVHI/PVLO), and a live **P-401** product-tank level.
 
 ## Layout
 ```

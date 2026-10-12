@@ -48,17 +48,29 @@ Phase 2; OpenModelica is the FINAL phase.
 - Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)
 Pick/run a scenario with the `tank|vessel|reactor` arg or `PETROTWIN_SCENARIO`.
 
-## Baseline control + external setpoint attack
+## Baseline control + evolved attack (real-SIF realism)
 - The BPCS runs a proportional loop holding the PV at a **writable setpoint**
   (`BPCS_SETPOINT`, %MW1): `feed_cmd = clamp(bias + kp·(SP−PV), 0, 1000)`, kp signed
-  (negative for the reactor — its actuator is the coolant valve). With no attacker
-  the baseline holds setpoint forever and the SIS never trips.
-- The attack is external (`attack/attack.py`, Modbus): force an off-scale
-  `BPCS_SETPOINT` (drives the process) **and** set `SIS_OVERRIDE` (defeat the trip +
-  freeze the HMI). Setpoint-only is caught by the healthy SIS (defense-in-depth).
-- Control gains live in `common/scenarios.py` and are substituted into `bpcs.st` by
-  `plc/load_scenario.py` (same pattern as the SIS `trip_hh`). The reactor physics is
-  coolant-controlled (fixed reactant throughput) and time-dilated for legibility.
+  (negative for the reactor — its actuator is the coolant valve). Added realism
+  (P-only law unchanged): operator setpoint **clamp** `[SP_LO, SP_HI]`, **AUTO/MANUAL**
+  mode (`BPCS_MAN_MODE`/`BPCS_MAN_OUT`, %MW2) with bumpless transfer, and an output
+  **rate limit** (`CTRL_RATE_LIM_PM`). The SIS adds a pre-alarm "H", a bad-PV
+  fail-safe trip, and a **manual reset with deadband**; `SIS_OVERRIDE` is reframed as
+  a maintenance **BYPASS (MOS)** with `SIS_BYPASS_ACT` annunciation.
+- The attack is external (`attack/attack.py`, Modbus). Because the clamp defeats the
+  old off-scale-setpoint trick, the driver is now **MANUAL mode**: set `BPCS_MAN_MODE`
+  + drive `BPCS_MAN_OUT` to the extreme **and** set `SIS_OVERRIDE` (defeat the trip +
+  freeze the HMI). `--no-bypass` (manual drive, SIS armed) is the defense-in-depth
+  contrast; `--setpoint-only` shows the clamp neutralising the naive attack.
+- Terminal valves are real coils: the FILL valve (T-101 inlet) is the tank SIS's
+  block-valve final element (`SIS_BLK_OUT`); the EXPORT valve (P-401 outlet) is a
+  BPCS operator valve (`BPCS_OPV_OUT`). **P-401** is a terminal level sink
+  (`physics/product.py`), not an attack target.
+- Control gains, setpoint clamp, and SIS thresholds live in `common/scenarios.py` and
+  are substituted into `bpcs.st`/`sis.st` by `plc/load_scenario.py`. The reactor
+  physics is coolant-controlled (fixed reactant throughput) and time-dilated for
+  legibility. **Lock-step invariant:** `bridge/plc_io.py` `FakeBpcs`/`FakeSis` must
+  stay byte-for-byte logically identical to the ST programs.
 
 ## Repo conventions
 - Docs in repo root: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / this file.

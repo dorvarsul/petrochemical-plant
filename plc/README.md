@@ -72,14 +72,26 @@ outputs) is exercised by the Modbus bridge in Phase-0 step 4, with tests per
 ## Modbus mapping (recap)
 
 Authoritative map: `common/registers.py` / `ARCHITECTURE.md`. OpenPLC maps
-`%QWk` → holding register `k` and `%QXn.m` → coil `n*8+m`. A Modbus master may
-write coils and holding registers and read every table, so the bridge injects
-sensor values into the `%QW` holding registers the programs only read.
+`%QWk` → holding register `k`, `%MWk` → holding register `1024 + k` (a shared
+**memory** word), and `%QXn.m` → coil `n*8+m`. A master write to a `%QW` output is
+clobbered by the program image each scan, so every master-writable input (sensor,
+setpoint, manual output, mode, reset, valve commands) is a `%MW` word or a
+program-read coil; program outputs are `%QW`/`%QX`.
 
-- **BPCS** holding: `0` `BPCS_LEVEL_PV` (sensor in), `1` `BPCS_FEED_CMD` (out).
+- **BPCS** holding: `%MW0` `BPCS_PV` (sensor in), `%MW1` `BPCS_SETPOINT`
+  (operator/attack in, clamped), `%MW2` `BPCS_MAN_OUT` (manual cmd / AUTO track),
+  `%QW1` `BPCS_FEED_CMD` (out). BPCS coils: `0` `BPCS_MAN_MODE` (in),
+  `1`–`3` PV_HI/PV_LO/SP_CLAMPED (out), `4` `BPCS_OPV_CMD` (export valve in),
+  `5` `BPCS_OPV_OUT` (out).
 - **SIS** coils: `0` `SIS_TRIP_CMD` (out), `1` `SIS_TRIP_STATUS` (out),
-  `2` `SIS_OVERRIDE` (attacker in). SIS holding: `0` `SIS_LEVEL_PV` (sensor in),
-  `1` `SIS_LEVEL_HMI` (out, frozen under override).
+  `2` `SIS_OVERRIDE` (maintenance bypass, attacker in), `3` `SIS_RESET` (in),
+  `4`–`5` PREALARM_H/PV_BAD (out), `6` `SIS_BLK_OPEN_CMD` (fill valve in),
+  `7` `SIS_BLK_OUT` (out), `8`=`%QX1.0` `SIS_BYPASS_ACT` (out). SIS holding:
+  `%MW0` `SIS_PV` (sensor in), `%QW1` `SIS_PV_HMI` (out, frozen under bypass).
+
+The loader substitutes the per-scenario constants into both programs: BPCS
+`BIAS_PM`/`KP_NUM`/`KP_DEN` + the clamp `SP_LO`/`SP_HI`; SIS `TRIP_HH` +
+`PRE_ALARM_H`/`RESET_DB`/`PV_MAX` (`RATE_LIM`/`PV_MIN` are fixed).
 
 ## Stop / reset
 
