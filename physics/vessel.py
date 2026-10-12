@@ -57,6 +57,12 @@ class VesselModel:
         self.time = 0.0
         self.applied_feed = 0.0
         self._ruptured = False
+        # Connected-plant coupling (Phase 1): additive pressure-rise (bar/s) fed
+        # in from the UPSTREAM reactor — a hotter reactor product flashes more
+        # vapour into this drum. Zero by default, so the standalone vessel is
+        # byte-identical to Phase 0.5; ``PlantModel`` sets it each step from the
+        # reactor's temperature deviation. See physics/plant.py.
+        self.p_coupling = 0.0
 
     # --- uniform read-outs ---
     @property
@@ -83,7 +89,9 @@ class VesselModel:
         self.applied_feed = feed
 
         relief = self.k_relief if trip else 0.0
-        dPdt = self.k_in * feed - self.k_out - relief
+        # Own compressor/bleed/relief, plus any upstream coupling from the
+        # reactor (0 when standalone).
+        dPdt = self.k_in * feed - self.k_out - relief + self.p_coupling
         raw = self.pressure + dPdt * dt
 
         if raw >= self._fail:

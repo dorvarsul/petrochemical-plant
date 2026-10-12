@@ -171,6 +171,20 @@ The map encodes one control/attack story, parameterized per scenario — a
 scenarios differ only in the PV, its scaling, the trip threshold, and the
 physical meaning of the protective action:
 
+> **Connected plant (Phase 1, see `ROADMAP.md`).** The register map below is the
+> single-unit map: exactly one PV/BPCS/SIS set, as the standalone sims and the
+> live OpenPLC stack use it. Phase 1 *also* runs all three units as **one
+> flowsheet** — `T-101` feed tank → `R-301` reactor → `V-201` separation vessel,
+> forward-coupled (tank overfill warms the reactor; reactor runaway pressurises
+> the vessel) — with each scenario reframed as *which unit the attack targets*.
+> That connected plant is implemented on the Python + in-memory-PLC path
+> (`physics/plant.py`, `bridge/plant_bridge.py`), where each unit owns its own
+> BPCS+SIS pair with an independent register space, so the identical addresses
+> below never collide. Extending the **live** OpenPLC stack to three unit pairs
+> (this map replicated per unit, plus per-unit ST programs) is Phase 2, alongside
+> the whole-plant visualization. Validated OpenModelica physics is the **final**
+> phase, behind the unchanged `model.step(dt, feed_cmd, trip)` interface.
+
 | Scenario | PV (`reg_scale`) | BPCS actuator (control gain) | SIS trip (`trip_hh`) | Protective action | Failure |
 |----------|------------------|------------------------------|----------------------|-------------------|---------|
 | tank    | level, m (`×1000`)    | feed valve (+)       | 9.0 m (`9000`)   | force feed shut  | overflow at 10 m |
@@ -204,7 +218,7 @@ physical meaning of the protective action:
 
   This abuses a writable control setpoint plus a force/override path, both reachable
   over Modbus — the attack **pattern** (manipulate the setpoint, defeat the safety
-  layer, blind the operator), not Triton's program-injection **mechanism** (Phase 3).
+  layer, blind the operator), not Triton's program-injection **mechanism** (Phase 4).
   See `OVERVIEW.md` scope limit. `attack/attack.py` is the standalone attacker;
   `--reset` stands it down.
 - **How the commands reach the physics:** the bridge reads `SIS_TRIP_CMD` and
@@ -251,5 +265,5 @@ Holding registers (16-bit, master read/write):
 > This map is authoritative and lives in code as `common/registers.py` — the bridge,
 > both PLC programs, the HMI, and the attack script import names/addresses from there,
 > never hard-coding per file. A per-scan heartbeat register (so a frozen HMI would be
-> detectable) is deliberately **omitted** in Phase 0 and noted as a Phase-2 detection
+> detectable) is deliberately **omitted** in Phase 0 and noted as a Phase-3 detection
 > hook.

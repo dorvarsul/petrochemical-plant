@@ -73,7 +73,8 @@ testbed. HMI read off the PLCs = spoofable; 3D read off the physics = unspoofabl
 
 ## The three damage scenarios
 
-Each scenario maps to a real plant unit and the SIS interlock the attack disables:
+Each scenario maps to a real plant unit and the SIS interlock the attack disables
+(Phase 1 makes those units one connected flowsheet — see below):
 
 | Scenario              | Plant unit / failure | Interlock disabled   | Process model                                                        | Difficulty                  |
 |-----------------------|----------------------|----------------------|----------------------------------------------------------------------|-----------------------------|
@@ -81,11 +82,19 @@ Each scenario maps to a real plant unit and the SIS interlock the attack disable
 | **Tank overfill**       | Tank overflow / spill   | High-level trip     | Single ODE (mass balance)                                            | Safest Day-1 milestone      |
 | **Reactor runaway**     | Exothermic runaway      | Cooling-jacket trip | Two coupled ODEs (temperature + concentration, Arrhenius feedback)   | Hardest — Day-2 stretch     |
 
-The protected Phase-0 demo used **one** scenario; all three are now implemented on
-pure-Python ODE physics and are selectable through every layer (Phase 0.5). Physics
-realism for them — validated OpenModelica models, real geometry, relief sizing — is
-still a later phase (see `ROADMAP.md`). The reactor model in particular is tuned for a
-legible runaway, not plant fidelity.
+The protected Phase-0 demo used **one** scenario; all three are implemented on
+pure-Python ODE physics and are selectable through every layer (Phase 0.5) as
+three independent single-unit sims. **Phase 1 also wires them into one
+continuously-running plant** — `T-101` feed tank → `R-301` reactor → `V-201`
+separation vessel, with forward-coupled streams (an overfilling tank warms the
+reactor; a runaway reactor pressurises the vessel) — so each scenario becomes
+**the unit the attack targets** inside the same flowsheet. This runs today on the
+Python + in-memory-PLC path (`physics/plant.py`, `bridge/run_plant_demo.py`); the
+whole-plant *visualization* and the live OpenPLC multi-unit stack are Phase 2.
+Validated physics (OpenModelica, real geometry, relief sizing) is the **final**
+phase, dropped in behind the unchanged physics interface — plausible now,
+validated last. The reactor model in particular is tuned for a legible runaway,
+not plant fidelity. See `ROADMAP.md`.
 
 ## Honest scope limit (read this)
 

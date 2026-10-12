@@ -31,6 +31,14 @@ Done = live run: normal → inject attack → HMI green while 3D passes failure 
 The protected demo used ONE; all three now exist on pure-Python ODEs and are
 selectable through every layer (`common/scenarios.py` is the single source of
 per-scenario truth). Still Modbus-only; OpenModelica/validated physics deferred.
+The single-unit sims still run one at a time (Phase 0.5). Phase 1 ALSO wires all
+three into ONE connected flowsheet — `T-101` → `R-301` → `V-201`, forward-coupled
+(tank overfill warms the reactor; reactor runaway pressurises the vessel) — on the
+Python + in-memory-PLC path: `physics/plant.py`, `bridge/plant_bridge.py`,
+`bridge/run_plant_demo.py`, `tests/test_plant.py`. Couplings are zero at the
+baseline operating point, so the whole plant holds a connected steady state; each
+scenario is "which unit the attacker targets". Phase 2 adds the whole-plant view +
+the live OpenPLC multi-unit stack; OpenModelica is the FINAL phase.
 - Tank overfill → high-level trip (single ODE: level; the anchor)
 - Vessel overpressure → relief valve (single ODE: pressure)
 - Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)

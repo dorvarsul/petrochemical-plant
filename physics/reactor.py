@@ -80,6 +80,12 @@ class ReactorModel:
         self.time = 0.0
         self.applied_feed = 0.0
         self._runaway = False
+        # Connected-plant coupling (Phase 1): additive reactant throughput fed
+        # in from the UPSTREAM tank. Zero by default, so the standalone reactor
+        # is byte-identical to Phase 0.5; ``PlantModel`` sets it each step from
+        # the tank's level deviation (more tank head -> more feed -> more
+        # reactant). See physics/plant.py.
+        self.q_coupling = 0.0
 
     # --- uniform read-outs ---
     @property
@@ -113,7 +119,9 @@ class ReactorModel:
         # SIS trip the emergency cooling runs the jacket wide open.
         self.applied_feed = 1.0 if trip else u
 
-        q = self.q  # reactant throughput is fixed; the BPCS controls cooling
+        # Reactant throughput: the fixed base plus any upstream coupling from
+        # the tank (0 when standalone). The BPCS still controls only cooling.
+        q = self.q + self.q_coupling
         cool = self.cool_trip if trip else self.cool_min + u * (self.cool_ctrl - self.cool_min)
         h = dt / _SUBSTEPS
 

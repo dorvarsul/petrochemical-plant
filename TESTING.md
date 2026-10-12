@@ -113,6 +113,31 @@ divergence) and criterion G (independent data path) together are what make the d
 genuine demonstration of "HMI spoofable, ground truth not" rather than a scripted
 animation.
 
+## 6. Connected-plant acceptance test (Phase 1)
+
+Phase 1 runs all three units as ONE flowsheet (T-101 feed tank → R-301 reactor →
+V-201 vessel, forward-coupled — see `ARCHITECTURE.md` / `physics/plant.py`). Its
+"done" criteria are proven by `tests/test_plant.py` and made visible by
+`python3 -m bridge.run_plant_demo [tank|reactor|vessel]` (fake PLCs, one BPCS +
+one SIS per unit; no Docker). Each criterion below must hold:
+
+| # | Criterion | Pass requires |
+|---|-----------|---------------|
+| P1 | **Connected steady state.** With no attacker, every unit holds near its setpoint and no SIS trips, indefinitely. | All three hold; zero trips |
+| P2 | **Baseline-zero couplings.** At the operating point every forward coupling is zero (so steady state is exact, not a balance of disturbances). | `q_coupling == p_coupling == 0` at setpoint |
+| P3 | **Targeted failure.** Attacking one unit (malicious setpoint + `SIS_OVERRIDE`) drives THAT unit past its failure threshold while its HMI stays frozen/armed (large spoof gap). | Target fails; HMI frozen; gap > 0.4·fail_at |
+| P4 | **No neighbour failure.** The up/downstream units do not fail during a single-unit attack. | Only the target reaches failure |
+| P5 | **Forward coupling.** An upstream attack visibly moves its downstream neighbour (overfilled tank warms the reactor; runaway reactor pressurises the vessel); a downstream attack leaves upstream units undisturbed (no back-pressure in Phase 1). | Downstream responds; upstream static |
+| P6 | **Neighbour defence-in-depth.** When a reactor runaway pressurises the vessel, the vessel's own HEALTHY SIS trips and its relief holds it safe — even though the attacked unit's SIS is overridden. | Neighbour SIS trips, holds < rupture |
+| P7 | **Healthy-SIS contrast.** A setpoint-only attack (SIS left armed) is caught: the targeted unit trips and is held safe. | Target does not fail |
+
+The couplings are **plausible, hand-tuned, not validated** — the gains make an
+upstream attack visibly move its neighbour without instantly destroying it, not
+fitted to plant data. Validated connected physics is the final OpenModelica phase
+(`ROADMAP.md`). The LIVE OpenPLC multi-unit stack (three BPCS+SIS pairs over
+Modbus) and the whole-plant visualization are Phase 2; Phase 1 acceptance runs on
+the in-memory PLCs, exactly as the Phase-0.5 acceptance does (§5).
+
 ## Scope note
 
 These tests validate the attack **pattern** and the **detection insight**, within a
