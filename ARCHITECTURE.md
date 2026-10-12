@@ -142,12 +142,15 @@ two OpenPLC instances are Modbus slaves on `localhost` ports 5020/5021, the brid
 and HMI are masters on the same host, and the 3D view reads the physics model via
 in-process shared state/IPC. The diagram above is this single-host layout.
 
-### Phase 2.5 — distributed four-PC over an L2 segment (planned)
+### Phase 2.5 — distributed four-PC over an L2 segment
 
 The same software splits across **four physical Ubuntu Linux PCs on one layer-2
 Ethernet segment** — one PC per layer. This is a deployment change only: the four
 layers, the two-PLC split, the two data taps, the register map and the attack are
-all unchanged.
+all unchanged. The host/port plumbing (`common/deploy_config.py`), the standalone
+PC4 HMI (`ui/hmi_server.py`), and the per-PC `deploy/` folders are implemented and
+exercised against the real OpenPLC pair on one host; the physical 4-PC/L2 run is
+the one thing not yet done — see `deploy/README.md` "Status".
 
 | PC  | Layer hosted                 | Role on the wire                                  |
 |-----|------------------------------|---------------------------------------------------|

@@ -365,3 +365,21 @@ def get(scenario_id: str) -> Scenario:
 def ids() -> list[str]:
     """Scenario ids in a stable display order."""
     return ["tank", "vessel", "reactor"]
+
+
+def hmi_meta(sc: Scenario) -> dict:
+    """Static per-unit labels/units/thresholds every HMI renderer needs.
+
+    Single source so ui/plant_server.py's bundled /hmi tab and the standalone
+    ui/hmi_server.py (Phase 2.5, PC4) build identical tile metadata without
+    duplicating it.
+    """
+    return {
+        "id": sc.id, "title": sc.title, "tag": sc.unit_tag,
+        "pv_name": sc.pv_name, "pv_units": sc.pv_units, "pv_symbol": sc.pv_symbol,
+        "setpoint": sc.setpoint, "trip_hh": sc.trip_hh, "fail_at": sc.fail_at,
+        "trip_frac": round(sc.fraction(sc.trip_hh), 4),
+        "sp_frac": round(sc.fraction(sc.setpoint), 4),
+        "failure_word": sc.failure_word, "actuator": sc.actuator,
+        "trip_action": sc.trip_action,
+    }

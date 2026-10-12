@@ -20,6 +20,7 @@ import re
 import sys
 from pathlib import Path
 
+from common import deploy_config as D
 from common import registers as R
 from common import scenarios
 from plc.load_program import load, load_text
@@ -28,8 +29,12 @@ _HERE = Path(__file__).resolve().parent
 BPCS_ST = _HERE / "bpcs" / "bpcs.st"
 SIS_TEMPLATE = _HERE / "sis" / "sis.st"
 
-BPCS_URL = "http://127.0.0.1:8081"
-SIS_URL = "http://127.0.0.1:8082"
+# Default to the single-host web UI ports; PETROTWIN_BPCS_HOST/PETROTWIN_SIS_HOST
+# (see common/deploy_config.py) point these at PC2/PC3 for the distributed
+# layout. An explicit bpcs_url/sis_url argument (CLI or load_plant/load_scenario)
+# always wins over both.
+BPCS_URL = D.BPCS_WEB
+SIS_URL = D.SIS_WEB
 
 # Matches the `TRIP_HH : INT := <n>;` line the SIS template promises to keep.
 _TRIP_RE = re.compile(r"(TRIP_HH\s*:\s*INT\s*:=\s*)\d+(\s*;)")

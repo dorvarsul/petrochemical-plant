@@ -7,3 +7,7 @@ __pycache__/
 # Virtual env (pymodbus etc. for the live path; see requirements.txt)
 .venv/
 venv/
+
+# Phase 2.5 distributed deployment — real lab IPs, not the committed template
+# (see deploy/hosts.env.example).
+deploy/hosts.env

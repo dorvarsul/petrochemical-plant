@@ -46,11 +46,17 @@ from pathlib import Path
 import os
 
 from bridge.plant_bridge import make_fake_plant_bridge, make_live_plant_bridge
+from common import deploy_config as D
+from common import scenarios
 from physics.plant import FLOW
 
 STATIC = Path(__file__).parent / "static"
-HOST, PORT = "127.0.0.1", 8092
-BPCS_WEB, SIS_WEB = "http://127.0.0.1:8081", "http://127.0.0.1:8082"
+# Bind address + the OpenPLC web UIs used to load/restart programs. Default to
+# the single-host layout; PETROTWIN_PLANT_BIND_HOST=0.0.0.0 (+ PETROTWIN_BPCS_HOST
+# / PETROTWIN_SIS_HOST) move this to PC1 of the Phase-2.5 distributed layout —
+# see common/deploy_config.py / deploy/README.md.
+HOST, PORT = D.PLANT_BIND_HOST, D.PLANT_PORT
+BPCS_WEB, SIS_WEB = D.BPCS_WEB, D.SIS_WEB
 DT, SETTLE = 1.0, 0.12      # sim-seconds per step / real-seconds between steps
 # LIVE: drive the two REAL OpenPLC slaves (one BPCS + one SIS carrying all three
 # units) instead of the in-memory fake PLCs. Set via --live or PETROTWIN_LIVE=1;
@@ -60,17 +66,7 @@ EPS_COUPLING = 1e-3         # a coupling above this reads as "active" (propagati
                             # above baseline integrator residual, below real drive
 
 
-def _unit_meta(sc) -> dict:
-    """Static per-unit labels/units/thresholds the dashboard renders generically."""
-    return {
-        "id": sc.id, "title": sc.title, "tag": sc.unit_tag,
-        "pv_name": sc.pv_name, "pv_units": sc.pv_units, "pv_symbol": sc.pv_symbol,
-        "setpoint": sc.setpoint, "trip_hh": sc.trip_hh, "fail_at": sc.fail_at,
-        "trip_frac": round(sc.fraction(sc.trip_hh), 4),
-        "sp_frac": round(sc.fraction(sc.setpoint), 4),
-        "failure_word": sc.failure_word, "actuator": sc.actuator,
-        "trip_action": sc.trip_action,
-    }
+_unit_meta = scenarios.hmi_meta  # shared with ui/hmi_server.py (common/scenarios.py)
 
 
 class PlantRunner(threading.Thread):

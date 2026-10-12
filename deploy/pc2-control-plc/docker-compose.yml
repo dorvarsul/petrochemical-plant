@@ -1,0 +1,20 @@
+# PetroTwin — PC2: Control PLC / BPCS only (Phase 2.5 distributed deployment).
+#
+# Same image/service as plc/docker-compose.yml's "bpcs" entry, split into its
+# own file so PC2 brings up ONLY this container (PC3 brings up only "sis",
+# see ../pc3-safety-plc/docker-compose.yml). Ports/image are unchanged from
+# the single-host compose file — this is a deployment-topology split, not a
+# register-map or logic change. See ../README.md.
+#
+# Run from THIS directory:
+#   cd deploy/pc2-control-plc && docker compose up -d
+services:
+  bpcs:                              # Control PLC (BPCS)
+    build:
+      context: "https://github.com/thiagoralves/OpenPLC_v3.git#b5d41356dab4aeadca0dd7ca64ba542f870b595d"
+    image: petrotwin/openplc:v3
+    container_name: petrotwin-bpcs
+    ports:
+      - "8081:8080"   # web UI -> http://<this PC's IP>:8081  (login openplc/openplc)
+      - "5020:502"    # Modbus TCP slave -> PETROTWIN_BPCS_HOST:5020 from every other PC
+    restart: unless-stopped

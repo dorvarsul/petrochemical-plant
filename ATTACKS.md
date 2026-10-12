@@ -49,7 +49,9 @@ writable, are:
 > coil 16 / %MW 16 / %QW 8; unit 0 = tank unchanged). So the *same* logical write
 > targets a different physical address per unit — e.g. `SIS_OVERRIDE` is coil `2`
 > for tank, `18` (`%QX2.2`) for reactor, `34` (`%QX4.2`) for vessel. An external
-> attacker must know the target unit's block; the repo helpers compute it.
+> attacker must know the target unit's block; `attack/attack.py --plant` and
+> `bridge.plc_io.ModbusUnitView` compute it, so the one write still just says
+> which unit.
 
 Why these are writable and not simply locked: the setpoint, mode, manual output,
 reset and valve commands are legitimate operator/maintenance controls. The attack
@@ -63,6 +65,10 @@ which is precisely the real-world ICS problem. (Modbus has no authentication.)
 Each is a real write the repo can make via `attack/attack.py`, the whole-plant
 HMI buttons, or the PLC bridge. Commands assume the venv and both PLCs up and
 running the loaded program(s) (`./run_plant.sh start`, or `plc.load_scenario`).
+The `attack.attack` commands below target the **connected whole-plant** live
+stack (`--plant`, i.e. `run_plant.sh`/`ui.plant_server --live`); drop `--plant`
+only against the single-scenario stack (`plc.load_scenario <id>` with no
+`--plant`, `bridge.run_live_demo`) — see "Live multi-unit addressing" above.
 
 ### A. Safety override / MOS abuse — *defeat the protective trip* **(core Triton pattern)**
 - **MITRE ICS:** T0858 *Change Operating Mode*, T0878 *Alarm Suppression*.
@@ -71,7 +77,7 @@ running the loaded program(s) (`./run_plant.sh start`, or `plc.load_scenario`).
   refreshing `PV_HMI`, so the protective trip cannot fire and the operator's
   displayed value **freezes** at its last nominal reading.
 - **Perform (testbed).** `sis.write_coil(R.SisCoil.OVERRIDE, True)` — or, combined
-  with the actuator seizure below, `python -m attack.attack reactor`.
+  with the actuator seizure below, `python -m attack.attack reactor --plant`.
 - **Consequence.** The independent safety layer is gone. Any hazardous excursion
   now runs unchecked; the operator sees "armed / normal".
 - **Detect / defend.** The SIS annunciates `SIS_BYPASS_ACTIVE` (the one honest
@@ -85,8 +91,8 @@ running the loaded program(s) (`./run_plant.sh start`, or `plc.load_scenario`).
   extreme (feed valve wide open, or the reactor's coolant valve shut). MANUAL
   takes the proportional control law — *and the operator setpoint clamp* — out of
   the loop, so the actuator obeys the attacker directly.
-- **Perform (testbed).** `python -m attack.attack reactor --no-bypass` (manual
-  drive only), or the HMI "Inject attack" with *leave SIS armed* checked.
+- **Perform (testbed).** `python -m attack.attack reactor --plant --no-bypass`
+  (manual drive only), or the HMI "Inject attack" with *leave SIS armed* checked.
 - **Consequence.** The process variable is pushed toward failure (overfill /
   overpressure / runaway) at the maximum rate the actuator allows.
 - **Detect / defend.** A healthy SIS still trips at its high-high threshold and
@@ -96,8 +102,8 @@ running the loaded program(s) (`./run_plant.sh start`, or `plc.load_scenario`).
 
 ### C. Combined full attack — *B + A together* **(the demo)**
 - **Mechanism.** Seize the actuator (B) **and** bypass the SIS (A) in one go.
-- **Perform (testbed).** `python -m attack.attack reactor` (default), or HMI
-  "Inject attack" with the box unchecked.
+- **Perform (testbed).** `python -m attack.attack reactor --plant` (default), or
+  HMI "Inject attack" with the box unchecked.
 - **Consequence.** The process runs **past the failure threshold** while the HMI
   stays green and armed — defeat the SIS, blind the operator, run to failure.
 - **Detect / defend.** Only an out-of-band, physics-derived view (the 3D ground
@@ -120,7 +126,7 @@ running the loaded program(s) (`./run_plant.sh start`, or `plc.load_scenario`).
 - **MITRE ICS:** T0836 *Modify Parameter*.
 - **Mechanism.** Write an off-scale `BPCS_SETPOINT` hoping the control law drives
   the actuator to saturation.
-- **Perform (testbed).** `python -m attack.attack reactor --setpoint-only`.
+- **Perform (testbed).** `python -m attack.attack reactor --plant --setpoint-only`.
 - **Consequence.** **Defeated** by the operator-setpoint **clamp** `[SP_LO,SP_HI]`:
   the BPCS clamps the value and annunciates `SP_CLAMPED`; tank/vessel settle at the
   clamp (below trip). (The reactor's exotherm still reaches its trip even at the
@@ -177,7 +183,7 @@ running the loaded program(s) (`./run_plant.sh start`, or `plc.load_scenario`).
   a legitimate reset is blocked/replayed. The SIS gates reset on a deadband
   (`PV < TRIP_HH − RESET_DB`) and a good PV, which limits abuse.
 - **Perform (testbed).** `sis.write_coil(R.SisCoil.RESET, True/False)`, or
-  `python -m attack.attack reactor --reset` (the stand-down path).
+  `python -m attack.attack reactor --plant --reset` (the stand-down path).
 - **Consequence.** Clearing a trip while the hazard persists (if the deadband is
   defeated via G) re-exposes the process; blocking reset is a recovery-phase DoS.
 - **Detect / defend.** Deadband + good-PV gating (implemented); require manual,

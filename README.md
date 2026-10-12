@@ -91,10 +91,12 @@ directly (feed wide open / coolant shut) **and** sets the SIS bypass (suppressin
 the trip and freezing the HMI). Launch it from the CLI (or the dashboard's "Inject
 attack" button, which makes the same writes):
 ```bash
-.venv/bin/python -m attack.attack reactor               # MANUAL drive + SIS bypass (full)
-.venv/bin/python -m attack.attack reactor --no-bypass   # MANUAL drive, SIS left armed (caught)
-.venv/bin/python -m attack.attack reactor --setpoint-only  # naive setpoint tamper (clamped -> caught)
-.venv/bin/python -m attack.attack reactor --reset       # stand down (AUTO, clear bypass, pulse SIS reset)
+# --plant targets the connected whole-plant stack (this dashboard); omit it
+# only against the single-unit `plc.load_scenario <id>` (no --plant) demo above.
+.venv/bin/python -m attack.attack reactor --plant               # MANUAL drive + SIS bypass (full)
+.venv/bin/python -m attack.attack reactor --plant --no-bypass   # MANUAL drive, SIS left armed (caught)
+.venv/bin/python -m attack.attack reactor --plant --setpoint-only  # naive setpoint tamper (clamped -> caught)
+.venv/bin/python -m attack.attack reactor --plant --reset       # stand down (AUTO, clear bypass, pulse SIS reset)
 ```
 The whole-plant view adds a **"leave SIS armed"** checkbox (the defense-in-depth
 contrast), a **"Reset SIS"** button, clickable **FILL / EXPORT** valves (real PLC

@@ -13,11 +13,12 @@ Triton incident (the plant tripped safely instead). PetroTwin lets defenders wat
 that failure unfold in a lab so they can study how to detect and prevent it.
 
 Nothing here touches a real plant. Every "device" is a simulation or an open-source
-soft component. Through Phase 2 it all runs on **one workstation**; a planned
-Phase 2.5 splits the four layers onto **four Ubuntu Linux PCs on one layer-2
+soft component. Through Phase 2 it all runs on **one workstation**; Phase 2.5
+splits the four layers onto **four Ubuntu Linux PCs on one layer-2
 Ethernet segment** (physics+3D, control PLC, safety PLC, HMI) — a
-deployment-topology change only, still Modbus (now Modbus TCP over the L2). See
-`ROADMAP.md` / `ARCHITECTURE.md`.
+deployment-topology change only, still Modbus (now Modbus TCP over the L2). The
+software side of that split is implemented (see `deploy/README.md`); the
+physical 4-PC run is the one piece still pending. See `ROADMAP.md` / `ARCHITECTURE.md`.
 
 ## Why it exists
 

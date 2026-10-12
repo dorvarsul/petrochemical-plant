@@ -36,6 +36,15 @@ Usage (needs the venv + both PLCs reachable and RUNNING the scenario):
 ``--reset`` returns to AUTO at the safe setpoint, clears the bypass, and pulses
 the SIS RESET pushbutton to clear a latched trip (the reset only takes once the
 PV has fallen a deadband below the trip; see plc/sis/sis.st).
+
+``--plant`` targets the CONNECTED whole-plant live stack instead of the
+single-scenario one (``ui.plant_server --live`` / ``run_plant.sh``, which loads
+all three units onto the two slaves via ``plc.load_scenario.load_plant`` — see
+ARCHITECTURE.md "Live multi-unit addressing"). Without it, every address below
+is unit 0 (tank); with it, the chosen scenario's unit offset is applied via
+``bridge.plc_io.ModbusUnitView`` — the exact wrapper ``PlantBridge``'s live
+path uses — so e.g. ``attack.attack reactor --plant`` correctly hits the
+reactor's block (coil 16+) instead of silently landing on the tank's.
 """
 
 from __future__ import annotations
@@ -43,7 +52,7 @@ from __future__ import annotations
 import os
 import sys
 
-from bridge.plc_io import ModbusPlc
+from bridge.plc_io import ModbusPlc, ModbusUnitView
 from common import registers as R
 from common import scenarios
 
@@ -53,6 +62,7 @@ def main() -> None:
     reset = "--reset" in args
     setpoint_only = "--setpoint-only" in args
     no_bypass = "--no-bypass" in args
+    plant = "--plant" in args
     positional = [a for a in args if not a.startswith("--")]
     sid = positional[0] if positional else \
         os.environ.get("PETROTWIN_SCENARIO", scenarios.DEFAULT_SCENARIO)
@@ -60,6 +70,10 @@ def main() -> None:
 
     bpcs = ModbusPlc.for_instance(R.Instance.BPCS)
     sis = ModbusPlc.for_instance(R.Instance.SIS)
+    if plant:
+        unit = R.UNIT_INDEX[sid]
+        bpcs = ModbusUnitView(bpcs, unit)
+        sis = ModbusUnitView(sis, unit)
     try:
         if reset:
             bpcs.write_coil(R.BpcsCoil.MAN_MODE, False)

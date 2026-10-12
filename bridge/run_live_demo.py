@@ -20,6 +20,7 @@ import time
 
 from bridge.bridge import Bridge
 from bridge.plc_io import ModbusPlc
+from common import deploy_config as D
 from common import registers as R
 from common import scenarios
 from physics import make_model
@@ -45,8 +46,8 @@ def main():
     sc = scenarios.get(sid)
 
     print("Resetting PLC runtimes for a clean run ...")
-    restart_runtime("http://127.0.0.1:8081")
-    restart_runtime("http://127.0.0.1:8082")
+    restart_runtime(D.BPCS_WEB)
+    restart_runtime(D.SIS_WEB)
 
     bpcs = ModbusPlc.for_instance(R.Instance.BPCS)
     sis = ModbusPlc.for_instance(R.Instance.SIS)

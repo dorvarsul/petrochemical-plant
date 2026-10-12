@@ -51,14 +51,28 @@ control, one SIS for all three units' safety — via per-unit OFFSET register bl
 (`registers.unit_addr`, applied by `bridge/plc_io.py` `ModbusUnitView`) and one
 GENERATED 3-instance ST program per slave (`plc/load_scenario.py` `load_plant`);
 no extra containers, single-unit map stays canonical (unit 0 = tank). Proven by
-`tests/test_plant_live.py`. Phase 2 is DONE. Next up (Phase 2.5, planned) is a
-DEPLOYMENT-only split onto FOUR Ubuntu Linux PCs on one L2 Ethernet segment —
-PC1 physics+3D, PC2 control PLC, PC3 safety PLC, PC4 HMI; `localhost:5020/5021`
-becomes Modbus TCP to real host IPs, physics+3D stay co-located so the direct
-tap stays a local (unspoofable) read, layers/register-map/attack unchanged, still
-Modbus-only. OpenModelica is the FINAL phase.
+`tests/test_plant_live.py`. Phase 2 is DONE. Phase 2.5 is a DEPLOYMENT-only
+split onto FOUR Ubuntu Linux PCs on one L2 Ethernet segment — PC1 physics+3D,
+PC2 control PLC, PC3 safety PLC, PC4 HMI; `localhost:5020/5021` becomes Modbus
+TCP to real host IPs, physics+3D stay co-located so the direct tap stays a
+local (unspoofable) read, layers/register-map/attack unchanged, still
+Modbus-only. **Software done, physical 4-PC run pending**: every host/port is
+now read from `common/deploy_config.py` (one env var per address, defaulting
+to the old localhost layout — nothing above changes unless you set one); PC4
+runs a genuinely standalone, physics-blind HMI (`ui/hmi_server.py`, a Modbus
+master with NO import of `physics.plant`, `./run_hmi.sh`); the OpenPLC compose
+file is split one-container-per-PC (`deploy/pc2-control-plc/`,
+`deploy/pc3-safety-plc/`); `attack/attack.py` gained `--plant` (apply the
+per-unit offset so it hits the right unit of the CONNECTED plant instead of
+always unit 0/tank — a real pre-existing bug this surfaced and fixed); and
+`deploy/` has a README + checklist per PC. All exercised against the real
+OpenPLC pair on one host (loopback standing in for the L2); see
+`deploy/README.md` "Status" for what that does and doesn't prove, and
+`deploy/checklist.md` for the real multi-PC bring-up. OpenModelica is the
+FINAL phase.
 `run_plant.sh start|stop` is the one-command runner (containers up + serve + open
-tab; fake fallback if no Docker).
+tab; fake fallback if no Docker; now also probes configured remote PLC hosts
+over the network before falling back — see `deploy/pc1-physics-3d/README.md`).
 - Tank overfill → high-level trip (single ODE: level; the anchor)
 - Vessel overpressure → relief valve (single ODE: pressure)
 - Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)

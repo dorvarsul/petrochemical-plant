@@ -44,6 +44,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 
+from common import deploy_config as _D
+
 # --- Scaling (PV scaling is per-scenario; see common/scenarios.py) ---------
 VALVE_PER_MILLE = 1000  # valve register = round(fraction * 1000), unit = per-mille
 VALVE_REG_MAX = 1000    # fully open
@@ -59,10 +61,13 @@ class Instance(str, Enum):
     SIS = "sis"    # Safety PLC
 
 
-# Default host endpoints (host-mapped container ports; see plc/docker-compose.yml).
+# Host endpoints. Default to the single-host container ports (see
+# plc/docker-compose.yml); overridable per PETROTWIN_BPCS_HOST/PETROTWIN_SIS_HOST
+# (+ _MODBUS_PORT) for the Phase-2.5 distributed layout — see
+# common/deploy_config.py / deploy/README.md. Never hard-code a host elsewhere.
 ENDPOINTS = {
-    Instance.BPCS: ("127.0.0.1", 5020),
-    Instance.SIS: ("127.0.0.1", 5021),
+    Instance.BPCS: _D.BPCS_MODBUS,
+    Instance.SIS: _D.SIS_MODBUS,
 }
 
 

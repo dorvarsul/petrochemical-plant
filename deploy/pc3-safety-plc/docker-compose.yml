@@ -1,0 +1,25 @@
+# PetroTwin — PC3: Safety PLC / SIS only (Phase 2.5 distributed deployment).
+#
+# Same image/service as plc/docker-compose.yml's "sis" entry, split into its
+# own file so PC3 brings up ONLY this container (PC2 brings up only "bpcs",
+# see ../pc2-control-plc/docker-compose.yml). Ports/image are unchanged from
+# the single-host compose file — this is a deployment-topology split, not a
+# register-map or logic change. See ../README.md.
+#
+# This is the attack TARGET: the SIS is the safety instrumented system the
+# attack overrides. Builds its own image independently (no dependency on PC2
+# having built anything first — same pinned official source + commit as the
+# BPCS image).
+#
+# Run from THIS directory:
+#   cd deploy/pc3-safety-plc && docker compose up -d
+services:
+  sis:                               # Safety PLC (SIS) - the attack target
+    build:
+      context: "https://github.com/thiagoralves/OpenPLC_v3.git#b5d41356dab4aeadca0dd7ca64ba542f870b595d"
+    image: petrotwin/openplc:v3
+    container_name: petrotwin-sis
+    ports:
+      - "8082:8080"   # web UI -> http://<this PC's IP>:8082  (login openplc/openplc)
+      - "5021:502"    # Modbus TCP slave -> PETROTWIN_SIS_HOST:5021 from every other PC
+    restart: unless-stopped

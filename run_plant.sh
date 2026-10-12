@@ -12,12 +12,18 @@
 # `start` brings the two OpenPLC containers up first; the server self-loads the
 # multi-unit PLC programs. If Docker is unavailable it falls back to the
 # dependency-free fake-PLC path so the view still runs.
+#
+# Phase 2.5 (distributed, 4-PC): on PC1, `source deploy/hosts.env` first so
+# PETROTWIN_BPCS_HOST/PETROTWIN_SIS_HOST point at PC2/PC3's real IPs — this
+# script then probes THOSE hosts over the network instead of looking for a
+# local Docker container, so it needs no other change to run on PC1. See
+# deploy/README.md / deploy/checklist.md.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 MODULE="ui.plant_server"
-PORT=8092
+PORT="${PETROTWIN_PLANT_PORT:-8092}"
 URL="http://127.0.0.1:${PORT}"
 LOG="/tmp/petrotwin-plant.log"
 PY=".venv/bin/python"
@@ -25,6 +31,13 @@ PY=".venv/bin/python"
 
 COMPOSE="plc/docker-compose.yml"
 CONTAINERS=(petrotwin-bpcs petrotwin-sis)
+BPCS_HOST="${PETROTWIN_BPCS_HOST:-127.0.0.1}"
+BPCS_MODBUS_PORT="${PETROTWIN_BPCS_MODBUS_PORT:-5020}"
+SIS_HOST="${PETROTWIN_SIS_HOST:-127.0.0.1}"
+SIS_MODBUS_PORT="${PETROTWIN_SIS_MODBUS_PORT:-5021}"
+
+# --- can we already reach a Modbus TCP slave at host:port? ---------------
+_tcp_open() { (exec 3<>"/dev/tcp/$1/$2") 2>/dev/null && exec 3>&- 3<&-; }
 
 pids() { pgrep -f "$MODULE" 2>/dev/null || true; }
 
@@ -41,20 +54,35 @@ open_url() {
   echo "   (open $url manually — no browser opener found)"
 }
 
-# --- ensure the two OpenPLC containers are running; echo "ok" on success --
+# --- ensure both OpenPLC slaves are reachable; echo "ok" on success -------
+# First tries the network (works for a remote PC2/PC3 in the distributed
+# layout AND for already-running local containers); only falls back to
+# bringing up LOCAL containers via docker-compose when both hosts are still
+# at their localhost default (i.e. this is the single-host case).
 ensure_openplc() {
+  if _tcp_open "$BPCS_HOST" "$BPCS_MODBUS_PORT" && _tcp_open "$SIS_HOST" "$SIS_MODBUS_PORT"; then
+    echo ok; return
+  fi
+  if [ "$BPCS_HOST" != "127.0.0.1" ] || [ "$SIS_HOST" != "127.0.0.1" ]; then
+    echo >&2 "   OpenPLC: configured for $BPCS_HOST:$BPCS_MODBUS_PORT / $SIS_HOST:$SIS_MODBUS_PORT" \
+              "but unreachable — bring up PC2/PC3 first (see deploy/checklist.md); running on the fake-PLC path"
+    return
+  fi
   if ! command -v docker >/dev/null 2>&1; then
     echo >&2 "   OpenPLC: docker not found — running on the fake-PLC path"
     return
   fi
-  local up=1 c
-  for c in "${CONTAINERS[@]}"; do
-    [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = "true" ] || up=0
+  echo >&2 "   OpenPLC: bringing local containers up ..."
+  if ! docker compose -f "$COMPOSE" up -d >/dev/null 2>&1; then
+    echo >&2 "   OpenPLC: 'docker compose up -d' failed — running on the fake-PLC path"
+    return
+  fi
+  local i
+  for i in $(seq 1 20); do  # containers just started: give the ports a moment
+    _tcp_open "$BPCS_HOST" "$BPCS_MODBUS_PORT" && _tcp_open "$SIS_HOST" "$SIS_MODBUS_PORT" && { echo ok; return; }
+    sleep 0.5
   done
-  if [ "$up" -eq 1 ]; then echo ok; return; fi
-  echo >&2 "   OpenPLC: bringing containers up ..."
-  if docker compose -f "$COMPOSE" up -d >/dev/null 2>&1; then echo ok
-  else echo >&2 "   OpenPLC: 'docker compose up -d' failed — running on the fake-PLC path"; fi
+  echo >&2 "   OpenPLC: containers up but Modbus ports never answered — running on the fake-PLC path"
 }
 
 start() {
