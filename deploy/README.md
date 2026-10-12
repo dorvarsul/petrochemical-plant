@@ -8,6 +8,10 @@ scenarios, or the attack. See `ROADMAP.md` ("Distributed deployment") and
 `ARCHITECTURE.md` ("Deployment topology") for the why; this folder is the
 *how*.
 
+**Start here:** **[`DEPLOY.md`](../DEPLOY.md)** at the repo root has the
+exact, copy-pasteable step-by-step instructions for the full 4-PC bring-up.
+This folder holds the per-PC rationale and detail that file links to.
+
 ```
   PC1  physics + 3D  (ground truth; bridge = Modbus TCP master)
         │
@@ -56,8 +60,8 @@ process finds another process:
 | PC4 | [`pc4-hmi/`](pc4-hmi/README.md) | the standalone operator HMI |
 | —   | [`attacker/`](attacker/README.md) | the external attack script — any host on the L2 |
 
-Read **[`checklist.md`](checklist.md)** for the bring-up order and the
-acceptance run across all four PCs.
+`checklist.md` in this folder is a short pre-flight checklist; `DEPLOY.md`
+(repo root) is the actual bring-up walkthrough.
 
 ## Status (honest)
 
