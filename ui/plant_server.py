@@ -8,8 +8,9 @@ per unit) and serves a single dashboard that shows **all three units at once**:
   * ``truth`` per unit comes from the physics (the 3D view) — unspoofable.
   * ``hmi``   per unit comes from that unit's SIS registers — spoofable.
 
-The operator can attack ANY ONE unit (malicious BPCS setpoint + SIS_OVERRIDE,
-or setpoint-only for the defence-in-depth contrast); the whole plant keeps
+The operator can attack ANY ONE unit (BPCS forced to MANUAL + SIS bypass, or
+manual-drive-with-SIS-armed for the defence-in-depth contrast), toggle the
+terminal FILL/EXPORT valves, and reset a latched SIS trip; the whole plant keeps
 running around it and the forward couplings propagate the disturbance
 downstream — exactly the Phase-1 story, now watchable as one flowsheet.
 
@@ -85,6 +86,20 @@ class PlantRunner(threading.Thread):
             self._pending.append(("standdown", unit, False))
         return True
 
+    def request_valve(self, valve, is_open):
+        if valve not in ("fill", "export"):
+            return False
+        with self._lock:
+            self._pending.append(("valve", valve, bool(is_open)))
+        return True
+
+    def request_sisreset(self, unit):
+        if unit not in FLOW:
+            return False
+        with self._lock:
+            self._pending.append(("sisreset", unit, False))
+        return True
+
     def request_reset(self):
         with self._lock:
             self._reset = True
@@ -105,7 +120,10 @@ class PlantRunner(threading.Thread):
                 u = sample.units[uid]
                 setpoint_now = u.setpoint
                 sp_tampered = abs(setpoint_now - sc.setpoint) > 0.5 / sc.reg_scale
-                attacked = bool(u.override or sp_tampered)
+                # The evolved attack drives through MANUAL mode, so "attacked"
+                # now also tracks man_mode (and the bypass), not just a tampered
+                # setpoint — otherwise a manual-drive attack would read as green.
+                attacked = bool(u.override or u.man_mode or sp_tampered)
                 any_attacked = any_attacked or attacked
                 meta.update({
                     "truth": {"pv": round(u.true_pv, 3),
@@ -123,7 +141,17 @@ class PlantRunner(threading.Thread):
                     "attacked": attacked,
                     "divergence": round(u.divergence, 3),
                     "frozen_hmi": self._frozen.get(uid),
+                    # real-SIF annunciators (for the HMI tile chips)
+                    "mode": "MAN" if u.man_mode else "AUTO",
+                    "sp_clamped": bool(u.sp_clamped),
+                    "pv_hi": bool(u.pv_hi),
+                    "pv_lo": bool(u.pv_lo),
+                    "prealarm_h": bool(u.prealarm_h),
+                    "bypass_active": bool(u.bypass_active),
+                    "pv_bad": bool(u.pv_bad),
                 })
+                if uid == "tank":
+                    meta["fill_open"] = bool(sample.fill_open)
             else:
                 f0 = sc.fraction(sc.pv0)
                 meta.update({
@@ -133,11 +161,33 @@ class PlantRunner(threading.Thread):
                     "setpoint_now": sc.setpoint, "setpoint_frac": round(f0, 4),
                     "setpoint_tampered": False, "override": False,
                     "attacked": False, "divergence": 0.0, "frozen_hmi": None,
+                    "mode": "AUTO", "sp_clamped": False, "pv_hi": False,
+                    "pv_lo": False, "prealarm_h": False, "bypass_active": False,
+                    "pv_bad": False,
                 })
+                if uid == "tank":
+                    meta["fill_open"] = True
             units[uid] = meta
 
         q = sample.q_coupling if sample else 0.0
         p = sample.p_coupling if sample else 0.0
+        if sample is not None and sample.product is not None:
+            pr = sample.product
+            product = {
+                "tag": pr["tag"], "pv": round(pr["pv"], 3),
+                "pv_units": pr["pv_units"], "fraction": round(pr["fraction"], 4),
+                "export_open": pr["export_open"],
+                "ll": pr["ll"], "lo": pr["lo"], "hi": pr["hi"], "hh": pr["hh"],
+            }
+        else:
+            spec = self.bridge.plant.product.spec
+            product = {
+                "tag": spec.tag, "pv": round(spec.level0, 3),
+                "pv_units": spec.pv_units,
+                "fraction": round(spec.fraction(spec.level0), 4),
+                "export_open": True,
+                "ll": False, "lo": False, "hi": False, "hh": False,
+            }
         return {
             "status": status,
             "time": round(sample.time, 1) if sample else 0.0,
@@ -149,22 +199,30 @@ class PlantRunner(threading.Thread):
                 "reactor_vessel": {"value": round(p, 6), "active": p > EPS_COUPLING},
             },
             "units": units,
+            "product": product,
         }
 
     def _apply_pending(self):
         with self._lock:
             pending, self._pending = self._pending, []
-        for verb, unit, bypass in pending:
+        for verb, arg, flag in pending:
             if verb == "attack":
                 # Capture the HMI value the operator will be frozen at, then inject.
-                self._frozen[unit] = round(self.bridge.hmi_pv(unit), 3)
-                self.bridge.attack(unit, bypass=bypass)
-                self._target = unit
+                self._frozen[arg] = round(self.bridge.hmi_pv(arg), 3)
+                self.bridge.attack(arg, bypass=flag)
+                self._target = arg
             elif verb == "standdown":
-                self.bridge.stand_down(unit)
-                self._frozen.pop(unit, None)
-                if self._target == unit:
+                self.bridge.stand_down(arg)
+                self._frozen.pop(arg, None)
+                if self._target == arg:
                     self._target = None
+            elif verb == "valve":
+                if arg == "fill":
+                    self.bridge.set_fill_valve(flag)
+                else:
+                    self.bridge.set_export_valve(flag)
+            elif verb == "sisreset":
+                self.bridge.reset_sis(arg)
 
     def run(self):
         while not self._stop:
@@ -228,6 +286,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
         elif self.path.startswith("/api/standdown"):
             ok = RUNNER.request_standdown(self._json_body().get("unit", ""))
+            self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
+        elif self.path.startswith("/api/valve"):
+            body = self._json_body()
+            ok = RUNNER.request_valve(body.get("valve", ""),
+                                      bool(body.get("open", False)))
+            self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
+        elif self.path.startswith("/api/sisreset"):
+            ok = RUNNER.request_sisreset(self._json_body().get("unit", ""))
             self._send(200 if ok else 400, json.dumps({"ok": ok}), "application/json")
         elif self.path.startswith("/api/reset"):
             RUNNER.request_reset()

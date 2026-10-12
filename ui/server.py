@@ -73,6 +73,7 @@ class SimRunner(threading.Thread):
                 "feed": 1.0, "trip": False, "attacked": attacked,
                 "setpoint": sc.setpoint, "setpoint_frac": sc.fraction(sc.setpoint),
                 "setpoint_tampered": False, "override": False,
+                "mode": "AUTO", "bypass_active": False,
                 "scenario": _scenario_meta(sc)}
 
     def _connect(self, attempts=12):
@@ -137,7 +138,12 @@ class SimRunner(threading.Thread):
         # Attack state is READ back from the PLCs each cycle, so an external
         # attacker (attack.py over Modbus) is reflected the same as the button.
         sp_tampered = abs(s.setpoint - sc.setpoint) > 0.5 / sc.reg_scale
-        attacked = bool(s.override or sp_tampered)
+        # The evolved attack drives through BPCS MANUAL mode; read it back (and
+        # the bypass annunciation) so the external attacker is reflected the same
+        # as the button, even though it never tampers the setpoint.
+        man_mode = bool(self.bpcs.read_coil(R.BpcsCoil.MAN_MODE))
+        bypass_active = bool(self.sis.read_coil(R.SisCoil.BYPASS_ACTIVE))
+        attacked = bool(s.override or man_mode or sp_tampered)
         with self._lock:
             self._snap = {
                 "time": round(s.time, 1), "status": "running",
@@ -154,6 +160,8 @@ class SimRunner(threading.Thread):
                 "setpoint_frac": round(min(max(s.setpoint / H, 0.0), 1.0), 4),
                 "setpoint_tampered": sp_tampered,
                 "override": bool(s.override),
+                "mode": "MAN" if man_mode else "AUTO",
+                "bypass_active": bypass_active,
                 "scenario": _scenario_meta(sc),
             }
 
