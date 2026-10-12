@@ -30,31 +30,6 @@
             border-bottom:1px solid var(--line); background:#10151c; }
   .legend b { color:var(--txt); }
 
-  /* ---- HMI strip (spoofable) ---- */
-  .hmi-strip { display:flex; gap:0; border-bottom:1px solid var(--line); background:#0a0e13; }
-  .hmi-strip .tile { flex:1; min-width:0; display:flex; gap:14px; padding:14px 18px; align-items:center; }
-  .hmi-strip .tile + .tile { border-left:1px solid var(--line); }
-  .hmi-strip .tile.attacked { background:#160d0d; box-shadow: inset 0 0 0 1px #5e1d1d; }
-  .minigauge { position:relative; width:46px; height:150px; border:2px solid #2a3340;
-               border-radius:7px; background:#0f141b; overflow:hidden; flex:none; }
-  .minigauge .fill { position:absolute; left:0; right:0; bottom:0; background:var(--green);
-                     transition:height .15s linear, background .3s; }
-  .minigauge .mark { position:absolute; left:0; right:0; border-top:1px dashed #51607340; }
-  .minigauge .mark.trip { border-top:1px dashed var(--red); }
-  .minigauge .mark.sp { border-top:1px dashed #6b7c90; }
-  .tbody { min-width:0; }
-  .tbody .tag { font-size:12px; color:var(--dim); letter-spacing:.5px; }
-  .tbody .tag b { color:var(--txt); font-weight:700; }
-  .tbody .big { font-size:30px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1; }
-  .tbody .big span { font-size:15px; color:var(--dim); font-weight:500; }
-  .lamp { display:inline-flex; align-items:center; gap:7px; font-weight:700;
-          padding:4px 9px; border-radius:6px; font-size:12px; margin-top:4px; }
-  .lamp .dot { width:10px; height:10px; border-radius:50%; }
-  .lamp.ok { background:#0f2419; color:var(--green); } .lamp.ok .dot { background:var(--green); box-shadow:0 0 8px var(--green); }
-  .lamp.trip { background:#2a1111; color:var(--red); } .lamp.trip .dot { background:var(--red); box-shadow:0 0 8px var(--red); }
-  .sp { font-size:11px; color:var(--dim); margin-top:5px; }
-  .sp b { font-variant-numeric:tabular-nums; }
-
   /* ---- 3D whole-plant view (unspoofable ground truth) ---- */
   main { flex:1; min-height:0; position:relative; background:#070a0e; }
   #c3d { width:100%; height:100%; display:block; }
@@ -97,12 +72,9 @@
     <button id="btnReset">Reset plant</button>
   </header>
   <div class="legend">
-    <b>Top — Operator HMI:</b> one tile per unit, each polled from that unit's Safety PLC (spoofable).
-    &nbsp;·&nbsp; <b>Below — Ground truth:</b> the whole connected flowsheet, driven straight from the physics (unspoofable).
-    <span id="legendTail">Attack one unit: its SIS is overridden, so its HMI tile stays green/frozen while the 3D shows it run to failure — and the forward couplings carry the disturbance downstream.</span>
+    <b>Ground truth:</b> the whole connected flowsheet, driven straight from the physics — <b>unspoofable</b>.
+    <span id="legendTail">Attack one unit and it runs to failure here while the operator's view stays green — open the <b>Operator HMI tab</b> (<code>/hmi</code>) to see what the control room sees, and the forward couplings carry the disturbance downstream.</span>
   </div>
-
-  <div class="hmi-strip" id="hmiStrip"><!-- tiles injected --></div>
 
   <main>
     <canvas id="c3d"></canvas>
@@ -780,62 +752,24 @@
     positionLabels();
   }
 
-  // ===================== HMI strip + ground-truth labels =====================
+  // ===================== ground-truth labels (projected) =====================
   var el = function (id) { return document.getElementById(id); };
-  var strip = el("hmiStrip"), labels = el("labels");
-  var clockEl = el("clock"), chip = el("attackChip"), legendTail = el("legendTail");
+  var labels = el("labels");
+  var clockEl = el("clock"), chip = el("attackChip");
   var liveChip = el("liveChip");
   var btnAttack = el("btnAttack"), btnStand = el("btnStand"), btnReset = el("btnReset");
   var btnSisReset = el("btnSisReset");
   var unitSel = el("unitSel"), spArmed = el("spArmed"), rupture = el("rupture");
 
-  var tiles = {}, labEls = {}, flowEls = {}, staticLabels = [], built = false;
+  var labEls = {}, flowEls = {}, staticLabels = [], built = false;
   var pLabel = null;  // live P-401 level readout (captured in buildStrip)
   function dp(u) { return u === "°C" ? 1 : 3; }
 
-  // Build the small annunciator pills for an HMI tile from its state.
-  function chipHtml(m) {
-    var out = "";
-    function pill(txt, bg, fg) {
-      out += '<span style="font:600 9px/1.4 ui-monospace,monospace;padding:1px 5px;' +
-        'border-radius:3px;background:' + bg + ';color:' + (fg || "#0b0f14") + '">' + txt + '</span>';
-    }
-    // mode is always shown; MANUAL is the suspicious state
-    if (m.mode === "MAN") pill("MANUAL", "#ffb020"); else pill("AUTO", "#1f3a2a", "#7fe0c0");
-    if (m.bypass_active) pill("SIS BYPASS", "#ff5a5a", "#180404");
-    if (m.pv_bad) pill("PV BAD", "#ff5a5a", "#180404");
-    if (m.sp_clamped) pill("SP CLAMPED", "#ffb020");
-    if (m.prealarm_h) pill("H", "#ffb020");
-    if (m.pv_hi) pill("PVHI", "#ff8b4a");
-    if (m.pv_lo) pill("PVLO", "#4aa3ff");
-    return out;
-  }
-
+  // Build the projected ground-truth labels (the HMI strip now lives on /hmi).
   function buildStrip(st) {
-    strip.innerHTML = ""; labels.innerHTML = "";
+    labels.innerHTML = "";
     FLOW.forEach(function (id) {
       var m = st.units[id];
-      var tile = document.createElement("div"); tile.className = "tile"; tile.dataset.id = id;
-      tile.innerHTML =
-        '<div class="minigauge"><div class="fill"></div>' +
-        '<div class="mark trip"></div><div class="mark sp"></div></div>' +
-        '<div class="tbody">' +
-        '<div class="tag"><b>' + m.tag + '</b> · ' + m.title + '</div>' +
-        '<div class="big"><span class="v">—</span> <span>' + m.pv_units + '</span></div>' +
-        '<div class="lamp ok"><span class="dot"></span><span class="lt">SIS ARMED</span></div>' +
-        '<div class="chips" style="display:flex;flex-wrap:wrap;gap:3px;margin:4px 0 2px"></div>' +
-        '<div class="sp"></div></div>';
-      strip.appendChild(tile);
-      tiles[id] = {
-        tile: tile, fill: tile.querySelector(".fill"),
-        trip: tile.querySelector(".mark.trip"), sp: tile.querySelector(".mark.sp"),
-        v: tile.querySelector(".v"), lamp: tile.querySelector(".lamp"),
-        lt: tile.querySelector(".lt"), spn: tile.querySelector(".sp"),
-        chips: tile.querySelector(".chips"),
-      };
-      tiles[id].trip.style.bottom = (m.trip_frac * 100).toFixed(1) + "%";
-      tiles[id].sp.style.bottom = (m.sp_frac * 100).toFixed(1) + "%";
-
       var lab = document.createElement("div"); lab.className = "lab";
       lab.innerHTML = '<div class="t"><b>' + m.tag + '</b> ' + m.pv_name + '</div>' +
                       '<div class="v">—</div><div class="s"></div>';
@@ -937,22 +871,7 @@
 
     var anyFail = false, failWord = "";
     FLOW.forEach(function (id) {
-      var m = st.units[id], T = tiles[id], Lb = labEls[id], u = m.pv_units, d = dp(u);
-      // ---- HMI tile (spoofable: SIS-reported PV + trip) ----
-      var tripped = m.hmi.trip_status;
-      T.v.textContent = m.hmi.pv.toFixed(d);
-      T.fill.style.height = (m.hmi.fraction * 100).toFixed(1) + "%";
-      T.fill.style.background = tripped ? "var(--red)" : "var(--green)";
-      T.lamp.className = "lamp " + (tripped ? "trip" : "ok");
-      T.lt.textContent = tripped ? "SIS TRIPPED" : "SIS ARMED";
-      T.tile.className = "tile" + (m.attacked ? " attacked" : "");
-      if (T.chips) T.chips.innerHTML = chipHtml(m);
-      var spTamp = m.setpoint_tampered;
-      T.spn.innerHTML = "SP <b style='color:" + (spTamp ? "#ff8b8b" : "#aeb9c6") + "'>" +
-        m.setpoint_now.toFixed(d) + " " + u + "</b>" + (spTamp ? " ⚠ forced" : "");
-      T.sp.style.bottom = (Math.min(1, m.setpoint_frac) * 100).toFixed(1) + "%";
-      T.sp.style.borderTopColor = spTamp ? "var(--red)" : "#6b7c90";
-
+      var m = st.units[id], Lb = labEls[id], u = m.pv_units, d = dp(u);
       // ---- ground-truth label (unspoofable: physics PV) ----
       var tru = m.truth, status = tru.failed ? m.failure_word
         : (m.trip ? "SIS TRIP" : (tru.pv >= m.trip_hh ? "OVER TRIP" : "nominal"));

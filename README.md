@@ -61,11 +61,18 @@ register block). It falls back to the fake-PLC path if Docker is unavailable.
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cd plc && docker compose build && cd ..
 
-./run_plant.sh start      # containers up + load multi-unit programs + serve http://127.0.0.1:8092
+./run_plant.sh start      # containers up + load multi-unit programs + open BOTH tabs
 ./run_plant.sh stop       # (start|stop|restart|status)
 ```
-The header shows a live-connection chip (**LIVE OpenPLC — BPCS+SIS connected**,
-or **SIM — fake PLCs** on the fallback). Equivalent to
+It opens two browser tabs off `http://127.0.0.1:8092`:
+- **`/`** — the 3D **ground-truth** train, straight from the physics (unspoofable).
+- **`/hmi`** — the **operator HMI** mimic of the whole process (crude feed →
+  INFLOW/FILL valve → T-101 → R-301 → V-201 → relief/FLARE → P-401 →
+  OUTFLOW/EXPORT valve), every value polled from the PLCs (spoofable).
+
+Put them side by side: under a SIS bypass the HMI freezes green while the 3D runs
+to failure. Each page's header shows a live-connection chip (**LIVE OpenPLC —
+BPCS+SIS connected**, or **SIM — fake PLCs** on the fallback). Equivalent to
 `.venv/bin/python -m ui.plant_server --live` once the containers are up.
 
 **Single-unit live demos / tests** still use the per-scenario programs:
@@ -107,8 +114,9 @@ plc/          bpcs.st (setpoint-control template), sis.st (trip template), load_
 bridge/       scenario-agnostic Modbus bridge loop; fake + real PLC clients (ModbusUnitView
               projects each unit's offset block); single-unit + connected-plant bridges; demos
               + tests/test_{bridge,plant}.py (fake) / test_{bridge,plant}_live.py (real, opt-in)
-ui/           plant_server.py + static/plant.html — the whole connected-plant view (live
-              OpenPLC via --live, or fake PLCs); one BPCS + one SIS carry all three units
+ui/           plant_server.py — whole connected-plant server (live OpenPLC via --live,
+              or fake PLCs); one BPCS + one SIS carry all three units. Serves two tabs:
+              static/plant.html (3D ground truth, /) + static/hmi.html (operator mimic, /hmi)
 attack/       attack.py — external Modbus attacker: force BPCS setpoint + SIS_OVERRIDE
 ```
 

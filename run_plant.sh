@@ -59,7 +59,10 @@ ensure_openplc() {
 
 start() {
   local p; p="$(pids)"
-  if [ -n "$p" ]; then echo "already running (pid $p) -> $URL"; open_url "$URL"; return 0; fi
+  if [ -n "$p" ]; then
+    echo "already running (pid $p) -> $URL  (HMI: $URL/hmi)"
+    open_url "$URL"; open_url "$URL/hmi"; return 0
+  fi
   local live_ok mode; live_ok="$(ensure_openplc)"
   if [ "$live_ok" = "ok" ]; then export PETROTWIN_LIVE=1; mode="LIVE OpenPLC"
   else unset PETROTWIN_LIVE; mode="fake PLCs"; fi
@@ -73,8 +76,12 @@ start() {
   done
   p="$(pids)"
   if [ -n "$p" ]; then
-    echo "started (pid $p, $mode) -> $URL   (log: $LOG)"
-    open_url "$URL"
+    echo "started (pid $p, $mode)"
+    echo "   3D ground truth : $URL"
+    echo "   operator HMI     : $URL/hmi"
+    echo "   (log: $LOG)"
+    open_url "$URL"          # 3D ground-truth tab
+    open_url "$URL/hmi"      # operator HMI tab
   else
     echo "failed to start — see $LOG"; tail -n 20 "$LOG" 2>/dev/null || true; return 1
   fi

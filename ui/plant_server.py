@@ -1,11 +1,16 @@
 """PetroTwin whole-plant server (Phase 2) — the entire connected flowsheet.
 
 Runs the **connected plant** (T-101 feed tank -> R-301 reactor -> V-201 vessel)
-through ``PlantBridge`` and serves a single dashboard that shows **all three
-units at once**:
+through ``PlantBridge`` and serves two views off one ``/api/state`` feed:
 
-  * ``truth`` per unit comes from the physics (the 3D view) — unspoofable.
-  * ``hmi``   per unit comes from that unit's SIS registers — spoofable.
+  * ``/``    — the 3D ground-truth train, driven straight from the physics
+               (``truth`` per unit) — **unspoofable** (`ui/static/plant.html`).
+  * ``/hmi`` — the operator HMI mimic of the whole process (inflow/outflow
+               valves, each unit, relief/flare, P-401), every value from that
+               unit's SIS registers (``hmi``) — **spoofable** (`ui/static/hmi.html`).
+
+Open them in two browser tabs: the HMI stays green/frozen under a SIS bypass
+while the 3D shows the real excursion — the "defeat the operator" contrast.
 
 In LIVE mode (``--live`` / ``PETROTWIN_LIVE=1``) the three units run on the REAL
 OpenPLC pair over Modbus — one BPCS slave carries control for all three and one
@@ -338,6 +343,12 @@ class Handler(BaseHTTPRequestHandler):
                            "text/html; charset=utf-8")
             except OSError:
                 self._send(500, "plant.html missing", "text/plain")
+        elif self.path in ("/hmi", "/hmi.html"):
+            try:
+                self._send(200, (STATIC / "hmi.html").read_bytes(),
+                           "text/html; charset=utf-8")
+            except OSError:
+                self._send(500, "hmi.html missing", "text/plain")
         elif self.path.startswith("/api/state"):
             self._send(200, json.dumps(RUNNER.snapshot()), "application/json")
         else:

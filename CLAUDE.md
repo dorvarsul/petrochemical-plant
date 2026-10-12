@@ -42,7 +42,10 @@ that fake-PLC path AND on the live OpenPLC pair (`ui/plant_server.py` +
 `ui/static/plant.html`; `./run_plant.sh start`, or `python3 -m ui.plant_server
 [--live]`, port 8092) — a spoofable three-tile HMI strip over one unspoofable 3D
 ground-truth train of the whole flowsheet, attack any unit, forward couplings
-animated, with a header chip showing live-OpenPLC-vs-fake. The LIVE stack carries
+animated, with a header chip showing live-OpenPLC-vs-fake. TWO tabs off one
+`/api/state`: `/` = 3D ground truth (`plant.html`, unspoofable), `/hmi` = operator
+mimic of the whole process (`hmi.html`: inflow/outflow valves, all units,
+relief/flare, P-401; spoofable). `run_plant.sh start` opens both. The LIVE stack carries
 all three units on the TWO existing slaves — one BPCS for all three units'
 control, one SIS for all three units' safety — via per-unit OFFSET register blocks
 (`registers.unit_addr`, applied by `bridge/plc_io.py` `ModbusUnitView`) and one
