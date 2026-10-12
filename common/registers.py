@@ -72,14 +72,36 @@ class BpcsHolding(IntEnum):
     PV = MW_HOLDING_BASE        # %MW0 (holding 1024) physics -> PLC sensor; program reads
     SETPOINT = MW_HOLDING_BASE + 1  # %MW1 (holding 1025) operator/ATTACK -> PLC; program reads
     FEED_CMD = 1                # %QW1 PLC -> physics (per-mille); program writes
+    # %MW2 (holding 1026) manual actuator command, per-mille. Master<->PLC: in
+    # AUTO the program TRACKS the computed output here (bumpless transfer); in
+    # MANUAL the program reads the master's value as the actuator position. The
+    # evolved attack drives this directly, bypassing the setpoint clamp.
+    MAN_OUT = MW_HOLDING_BASE + 2
+
+
+class BpcsCoil(IntEnum):
+    """BPCS coils (master read/write). The BPCS had none until Auto/Manual mode
+    and the operator export valve were added."""
+    MAN_MODE = 0      # %QX0.0  operator/attack -> PLC; 0 = AUTO, 1 = MANUAL (program reads)
+    PV_HI_ALARM = 1   # %QX0.1  PLC -> HMI;  pv >= SP_HI
+    PV_LO_ALARM = 2   # %QX0.2  PLC -> HMI;  pv <= SP_LO
+    SP_CLAMPED = 3    # %QX0.3  PLC -> HMI;  operator setpoint was out of range
+    OPV_CMD = 4       # %QX0.4  operator -> PLC; export-valve open request (program reads)
+    OPV_OUT = 5       # %QX0.5  PLC -> physics/HMI; export-valve state (= OPV_CMD)
 
 
 # --- SIS (Safety PLC) registers --------------------------------------------
 class SisCoil(IntEnum):
     """SIS coils (master read/write)."""
-    TRIP_CMD = 0     # %QX0.0  PLC -> physics; 1 = force protective action
-    TRIP_STATUS = 1  # %QX0.1  PLC -> HMI;     1 = tripped, 0 = armed-normal
-    OVERRIDE = 2     # %QX0.2  attack -> PLC;  1 = force/bypass (program reads)
+    TRIP_CMD = 0       # %QX0.0  PLC -> physics; 1 = force protective action
+    TRIP_STATUS = 1    # %QX0.1  PLC -> HMI;     1 = tripped, 0 = armed-normal
+    OVERRIDE = 2       # %QX0.2  attack -> PLC;  maintenance BYPASS/MOS (program reads)
+    RESET = 3          # %QX0.3  operator -> PLC; manual reset pushbutton (program reads)
+    PREALARM_H = 4     # %QX0.4  PLC -> HMI;  pv >= PRE_ALARM_H (below the HH trip)
+    PV_BAD = 5         # %QX0.5  PLC -> HMI;  transmitter out of range (fail-safe trip)
+    BLK_OPEN_CMD = 6   # %QX0.6  operator -> PLC; block/fill-valve open request (program reads)
+    BLK_OUT = 7        # %QX0.7  PLC -> physics/HMI; block valve = cmd AND NOT trip
+    BYPASS_ACTIVE = 8  # %QX1.0  PLC -> HMI;  MOS annunciation (= OVERRIDE); byte 1
 
 
 class SisHolding(IntEnum):
@@ -92,9 +114,16 @@ class SisHolding(IntEnum):
 class RegInfo:
     instance: Instance
     table: str      # "coil" | "holding"
-    st_var: str     # OpenPLC located variable, e.g. "%QW0" / "%QX0.2"
-    direction: str  # "physics->PLC" | "PLC->physics" | "PLC->HMI" | "attack->PLC"
+    st_var: str     # OpenPLC located variable, e.g. "%QW0" / "%QX0.2" / "%QX1.0"
+    direction: str  # physics->PLC | PLC->physics | PLC->HMI | attack->PLC | operator->PLC
     units: str      # "pv (scaled)" | "per-mille" | "bool"
+
+
+def _qx(addr: int) -> str:
+    """OpenPLC coil located variable for a Modbus coil address: coil n*8+m is
+    %QXn.m, so byte = addr // 8 and bit = addr % 8 (coils roll into byte 1 at
+    address 8 — e.g. BYPASS_ACTIVE at 8 -> %QX1.0)."""
+    return f"%QX{addr // 8}.{addr % 8}"
 
 
 # Flat metadata view keyed by (instance, table, address).
@@ -103,14 +132,40 @@ REGISTERS = {
         RegInfo(Instance.BPCS, "holding", "%MW0", "physics->PLC", "pv (scaled)"),
     (Instance.BPCS, "holding", BpcsHolding.SETPOINT):
         RegInfo(Instance.BPCS, "holding", "%MW1", "attack->PLC", "pv (scaled)"),
+    (Instance.BPCS, "holding", BpcsHolding.MAN_OUT):
+        RegInfo(Instance.BPCS, "holding", "%MW2", "attack->PLC", "per-mille"),
     (Instance.BPCS, "holding", BpcsHolding.FEED_CMD):
         RegInfo(Instance.BPCS, "holding", "%QW1", "PLC->physics", "per-mille"),
+    (Instance.BPCS, "coil", BpcsCoil.MAN_MODE):
+        RegInfo(Instance.BPCS, "coil", _qx(BpcsCoil.MAN_MODE), "attack->PLC", "bool"),
+    (Instance.BPCS, "coil", BpcsCoil.PV_HI_ALARM):
+        RegInfo(Instance.BPCS, "coil", _qx(BpcsCoil.PV_HI_ALARM), "PLC->HMI", "bool"),
+    (Instance.BPCS, "coil", BpcsCoil.PV_LO_ALARM):
+        RegInfo(Instance.BPCS, "coil", _qx(BpcsCoil.PV_LO_ALARM), "PLC->HMI", "bool"),
+    (Instance.BPCS, "coil", BpcsCoil.SP_CLAMPED):
+        RegInfo(Instance.BPCS, "coil", _qx(BpcsCoil.SP_CLAMPED), "PLC->HMI", "bool"),
+    (Instance.BPCS, "coil", BpcsCoil.OPV_CMD):
+        RegInfo(Instance.BPCS, "coil", _qx(BpcsCoil.OPV_CMD), "operator->PLC", "bool"),
+    (Instance.BPCS, "coil", BpcsCoil.OPV_OUT):
+        RegInfo(Instance.BPCS, "coil", _qx(BpcsCoil.OPV_OUT), "PLC->physics", "bool"),
     (Instance.SIS, "coil", SisCoil.TRIP_CMD):
-        RegInfo(Instance.SIS, "coil", "%QX0.0", "PLC->physics", "bool"),
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.TRIP_CMD), "PLC->physics", "bool"),
     (Instance.SIS, "coil", SisCoil.TRIP_STATUS):
-        RegInfo(Instance.SIS, "coil", "%QX0.1", "PLC->HMI", "bool"),
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.TRIP_STATUS), "PLC->HMI", "bool"),
     (Instance.SIS, "coil", SisCoil.OVERRIDE):
-        RegInfo(Instance.SIS, "coil", "%QX0.2", "attack->PLC", "bool"),
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.OVERRIDE), "attack->PLC", "bool"),
+    (Instance.SIS, "coil", SisCoil.RESET):
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.RESET), "operator->PLC", "bool"),
+    (Instance.SIS, "coil", SisCoil.PREALARM_H):
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.PREALARM_H), "PLC->HMI", "bool"),
+    (Instance.SIS, "coil", SisCoil.PV_BAD):
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.PV_BAD), "PLC->HMI", "bool"),
+    (Instance.SIS, "coil", SisCoil.BLK_OPEN_CMD):
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.BLK_OPEN_CMD), "operator->PLC", "bool"),
+    (Instance.SIS, "coil", SisCoil.BLK_OUT):
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.BLK_OUT), "PLC->physics", "bool"),
+    (Instance.SIS, "coil", SisCoil.BYPASS_ACTIVE):
+        RegInfo(Instance.SIS, "coil", _qx(SisCoil.BYPASS_ACTIVE), "PLC->HMI", "bool"),
     (Instance.SIS, "holding", SisHolding.PV):
         RegInfo(Instance.SIS, "holding", "%MW0", "physics->PLC", "pv (scaled)"),
     (Instance.SIS, "holding", SisHolding.PV_HMI):
