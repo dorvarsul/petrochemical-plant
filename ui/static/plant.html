@@ -102,7 +102,7 @@
 
   <main>
     <canvas id="c3d"></canvas>
-    <div class="srcline">source: physics model (direct) — not via any PLC or network · flow: T-101 → R-301 → V-201 · click the crude-feed / product-export valves to open/close</div>
+    <div class="srcline">source: physics model (direct) — not via any PLC or network · flow: T-101 → R-301 → V-201 · right-drag to rotate, wheel to zoom · click the crude-feed / product-export valves to open/close</div>
     <div id="labels"></div>
     <div class="rupture" id="rupture">● FAILURE ●</div>
   </main>
@@ -122,6 +122,21 @@
   var camera = new THREE.PerspectiveCamera(52, 1, 0.1, 260);
   camera.position.set(1.5, 8.6, 32);
   camera.lookAt(1.5, 0.4, 0);
+
+  // ---- orbit camera (right-drag to rotate, wheel to zoom; no auto-rotation) ----
+  var camTarget = new THREE.Vector3(1.5, 0.4, 0);
+  var camR = 33, camTheta = 0, camPhi = 1.32;   // spherical offset from target
+  function updateCamera() {
+    camPhi = Math.max(0.25, Math.min(1.45, camPhi));
+    camR = Math.max(12, Math.min(72, camR));
+    var sp = Math.sin(camPhi);
+    camera.position.set(
+      camTarget.x + camR * sp * Math.sin(camTheta),
+      camTarget.y + camR * Math.cos(camPhi),
+      camTarget.z + camR * sp * Math.cos(camTheta));
+    camera.lookAt(camTarget);
+  }
+  updateCamera();
 
   scene.add(new THREE.HemisphereLight(0x8ea2c0, 0x0a0e13, 0.75));
   scene.add(new THREE.AmbientLight(0x404a5a, 0.4));
@@ -311,7 +326,7 @@
 
   function buildVessel() {
     var g = new THREE.Group();
-    var R = 1.15, cyl = 1.9, headR = 0.85;
+    var R = 0.8, cyl = 4.2, headR = 0.55;   // tall vertical separation column
     // Translucent shell so the separator internals read; still tinted by
     // pressure (the ground-truth PV): teal -> amber -> red toward rupture.
     var bodyMat = std(0x2bd4c4, 0.3, 0.25, { transparent: true, opacity: 0.4, side: THREE.DoubleSide });
@@ -350,6 +365,8 @@
     comp.position.set(-3.6, -0.9, 0); g.add(comp);
     var motor = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.7, 16), M.steel());
     motor.rotation.z = Math.PI / 2; motor.position.set(-3.6, -0.45, 0); g.add(motor);
+    g.add(tube(V(-3.6, -1.25, 0), V(-3.6, -2.9, 0), 0.14, M.dark()));   // compressor support down to grade
+    g.add(new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.12, 0.9), M.base()).translateX(-3.6).translateY(-2.9));
     // two-phase feed enters the mid-shell (through the BPCS control valve), onto
     // the inlet diverter inside: vapour rises, liquid drops to the pool.
     g.add(tube(V(-3.15, -0.9, 0), V(-3.15, 0.2, 0), 0.09, pm));
@@ -468,12 +485,13 @@
   // ===================== whole-plant composition =====================
   var BUILD = { tank: buildTank, reactor: buildReactor, vessel: buildVessel };
   var UNIT_X = { tank: -8.6, reactor: 0, vessel: 8.6 };
-  var ANCHOR_Y = { tank: 2.1, reactor: 2.6, vessel: 4.9 };  // label anchor above each unit
+  var ANCHOR_Y = { tank: 2.1, reactor: 2.6, vessel: 3.4 };  // label anchor above each unit
+  var UNIT_Y = { tank: 0, reactor: 0, vessel: 0.85 };       // lift the tall column to stand on grade
 
   var units = {};            // id -> {build result, group, halo, anchor}
   FLOW.forEach(function (id) {
     var u = BUILD[id]();
-    u.group.position.x = UNIT_X[id];
+    u.group.position.set(UNIT_X[id], UNIT_Y[id], 0);
     rig.add(u.group);
     // attacked-unit highlight: a ring on the skid that glows under attack
     var haloMat = std(0xff4d4d, 0.1, 0.5, { transparent: true, opacity: 0.0, side: THREE.DoubleSide });
@@ -518,7 +536,7 @@
   var flare = new THREE.Group(); flare.position.set(18.2, 0, 0); rig.add(flare);
   var flareFlame;
   (function () {
-    var fB = -1.98, fTop = 5.0;
+    var fB = -1.98, fTop = 5.8;
     flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, fTop - fB, 20), M.steel()).translateY((fB + fTop) / 2));
     flare.add(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.22, 0.5, 20), M.dark()).translateY(fTop + 0.15));
     flareFlame = new Emitter(flare, { origin: V(0, fTop + 0.45, 0), dir: V(0, 1, 0), speed: 2.4, spread: 0.3, jitter: 0.5, gravity: 0.35, color: 0xff9a3a, size: 0.2, life: 0.8, count: 120, rate: 70 });
@@ -582,13 +600,13 @@
   var cFeed = connector([V(-14.6, -0.6, 0), V(-13.0, -0.6, 0)], 0x5a9bff, { n: 3 });                    // supply -> T-101
   var feedValve = valve(V(-13.8, -0.6, 0), "x", "control"); rig.add(feedValve);                         // crude fill valve (head of T-101)
   var cTR   = connector([V(-5.95, -0.15, 0), V(-5.95, 2.45, 0), V(-3.2, 2.45, 0)], 0x6fd0f5, { midT: 0.78 }); // T-101 bottom -> R-301 feed
-  var cRV   = connector([V(0.9, -1.75, 0), V(4.5, -1.75, 0), V(4.5, -0.9, 0)], 0x8ab4ff, { midT: 0.42 });     // R-301 product -> V-201 feed
+  var cRV   = connector([V(0.9, -1.75, 0), V(4.55, -1.75, 0), V(4.55, -0.05, 0)], 0x8ab4ff, { midT: 0.42 });   // R-301 product -> V-201 feed
   var cProd = connector([V(10.7, -2.3, 0), V(10.7, -1.3, 0), V(13.6, -1.3, 0)], 0x7fe0c0, { midT: 0.7 });     // V-201 bottoms -> P-401
-  connector([V(8.6, 3.7, 0), V(8.6, 4.4, 0), V(18.2, 4.4, 0), V(18.2, 5.0, 0)], 0xff9a3a, { flow: false, r: 0.06 }); // V-201 overhead/relief -> flare
+  connector([V(8.6, 5.4, 0), V(8.6, 5.9, 0), V(18.2, 5.9, 0), V(18.2, 5.8, 0)], 0xff9a3a, { flow: false, r: 0.06 }); // V-201 overhead/relief -> flare
 
   // terminal-equipment label anchors (projected like the units)
   var pAnchor = new THREE.Object3D(); pAnchor.position.set(14.8, 1.5, 0); rig.add(pAnchor);
-  var fAnchor = new THREE.Object3D(); fAnchor.position.set(18.2, 5.8, 0); rig.add(fAnchor);
+  var fAnchor = new THREE.Object3D(); fAnchor.position.set(18.2, 6.6, 0); rig.add(fAnchor);
 
   // ---- interactive valves (click to open/close, like real hand valves) ----
   // The crude FILL valve (head of T-101) and the product EXPORT valve (outlet of
@@ -615,8 +633,30 @@
     while (o) { if (o.userData && o.userData.onToggle) return o; o = o.parent; }
     return null;
   }
-  canvas.addEventListener("pointerdown", function (ev) { var g = pick(ev); if (g) g.userData.onToggle(); });
-  canvas.addEventListener("pointermove", function (ev) { canvas.style.cursor = pick(ev) ? "pointer" : ""; });
+  // left-click toggles a valve; right-drag orbits the camera; wheel zooms.
+  var dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  canvas.addEventListener("pointerdown", function (ev) {
+    if (ev.button === 2) {
+      dragging = true; lastX = ev.clientX; lastY = ev.clientY;
+      if (canvas.setPointerCapture) canvas.setPointerCapture(ev.pointerId);
+    } else if (ev.button === 0) {
+      var g = pick(ev); if (g) g.userData.onToggle();
+    }
+  });
+  canvas.addEventListener("pointermove", function (ev) {
+    if (dragging) {
+      camTheta -= (ev.clientX - lastX) * 0.006;
+      camPhi -= (ev.clientY - lastY) * 0.006;
+      lastX = ev.clientX; lastY = ev.clientY; updateCamera();
+    } else {
+      canvas.style.cursor = pick(ev) ? "pointer" : "grab";
+    }
+  });
+  window.addEventListener("pointerup", function () { dragging = false; });
+  canvas.addEventListener("wheel", function (ev) {
+    ev.preventDefault(); camR *= (ev.deltaY > 0 ? 1.08 : 0.92); updateCamera();
+  }, { passive: false });
   makeClickable(feedValve, function () { feedOpen = !feedOpen; });
   makeClickable(pExportValve, function () { exportOpen = !exportOpen; });
 
@@ -639,7 +679,7 @@
     requestAnimationFrame(animate);
     var dt = Math.min(0.05, clock.getDelta());
     tSway += dt;
-    rig.rotation.y = Math.sin(tSway * 0.12) * 0.14;   // gentle sway, keeps the train readable
+    // no auto-rotation — the camera is driven by the mouse (right-drag / wheel)
 
     FLOW.forEach(function (id) {
       var u = units[id], c = CTX[id];
