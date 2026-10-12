@@ -102,7 +102,7 @@
 
   <main>
     <canvas id="c3d"></canvas>
-    <div class="srcline">source: physics model (direct) — not via any PLC or network · flow: T-101 → R-301 → V-201</div>
+    <div class="srcline">source: physics model (direct) — not via any PLC or network · flow: T-101 → R-301 → V-201 · click the crude-feed / product-export valves to open/close</div>
     <div id="labels"></div>
     <div class="rupture" id="rupture">● FAILURE ●</div>
   </main>
@@ -267,7 +267,7 @@
     var floor = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.06, 48), M.dark());
     floor.position.y = yBot; g.add(floor);
 
-    var liqMat = std(0x0e0e12, 0.15, 0.4, { transparent: true, opacity: 0.95 });  // crude oil (black)
+    var liqMat = std(0x4f3a22, 0.2, 0.45, { transparent: true, opacity: 0.95, emissive: 0x241a0e });  // crude oil (dark, with sheen)
     var liquid = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.06, R - 0.06, H, 48), liqMat);
     g.add(liquid);
 
@@ -288,12 +288,12 @@
     g.add(instrument(V(R + 0.55, yBot + H * 0.5, 0.2), V(R, yBot + H * 0.5, 0)));
 
     var feed = new Emitter(g, { origin: V(-0.9, yBot + H - 0.1, 0), dir: V(0, -1, 0), speed: 1.4, spread: 0.12, jitter: 0.1, gravity: -1.5, color: 0x7a5a3a, size: 0.08, life: 0.5, count: 60, rate: 80 });
-    var spill = new Emitter(g, { origin: V(0, yBot + H + 0.02, 0), dir: V(0, 0.2, 0), speed: 0.8, spread: R * 1.3, jitter: 1.4, gravity: -3.2, color: 0x241a10, size: 0.1, life: 1.3, count: 220, rate: 200 });
+    var spill = new Emitter(g, { origin: V(0, yBot + H + 0.02, 0), dir: V(0, 0.2, 0), speed: 0.8, spread: R * 1.3, jitter: 1.4, gravity: -3.2, color: 0x5a4226, size: 0.1, life: 1.3, count: 220, rate: 200 });
 
     return { group: g, update: function (c) {
       var f = Math.max(0.0001, c.frac);
       liquid.scale.y = f; liquid.position.y = yBot + f * H / 2;
-      liqMat.color.copy(c.failed ? new THREE.Color(0xff3b3b) : (c.overTrip ? new THREE.Color(0xffb020) : new THREE.Color(0x0e0e12)));  // crude oil (black)
+      liqMat.color.copy(c.failed ? new THREE.Color(0xff3b3b) : (c.overTrip ? new THREE.Color(0xffb020) : new THREE.Color(0x4f3a22)));  // crude oil (dark)
       fv.setFrac(c.feed); esd.setOpen(!c.sisActive);
       feed.active = c.feed > 0.01 && !c.failed; feed.rate = 30 + 90 * c.feed;
       spill.active = c.failed;
@@ -491,8 +491,10 @@
   // cosmetic sinks — NOT in the ODEs (the physics still ends at V-201's
   // pressure), consistent with "plausible now, validated last".
   var ptank = new THREE.Group(); ptank.position.set(14.8, 0, 0); rig.add(ptank);
+  var pLiq, pDrain, pExportValve, pTankH, pTankBot;   // exposed for the live level + interactivity
   (function () {
     var R = 1.1, H = 2.4, yBot = -1.98;
+    pTankH = H; pTankBot = yBot;
     ptank.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 40, 1, true), M.glass()));
     [yBot, yBot + H].forEach(function (y) {
       var r = new THREE.Mesh(new THREE.TorusGeometry(R, 0.04, 10, 40), M.dark());
@@ -500,15 +502,17 @@
     });
     ptank.add(new THREE.Mesh(new THREE.ConeGeometry(R + 0.03, 0.45, 40), M.steel()).translateY(yBot + H + 0.22));
     ptank.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.06, 40), M.dark()).translateY(yBot));
-    var lh = H * 0.45;  // static product inventory
-    var liq = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.06, R - 0.06, lh, 40),
+    // product inventory — scaled each frame by the live level (fills from V-201
+    // bottoms, empties through the export valve below).
+    pLiq = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.06, R - 0.06, H * 0.92, 40),
       std(0xd9a441, 0.15, 0.35, { transparent: true, opacity: 0.9 }));  // refined product (amber)
-    liq.position.y = yBot + lh / 2; ptank.add(liq);
-    // manual export valve at the outlet so the product tank can be drawn off / emptied
+    ptank.add(pLiq);
+    // manual EXPORT valve at the outlet — CLICK to open/close; the tank empties
     var ppm = M.pipe();
     ptank.add(tube(V(R - 0.1, yBot + 0.15, 0), V(R + 1.1, yBot + 0.15, 0), 0.07, ppm));
-    ptank.add(tube(V(R + 1.1, yBot + 0.15, 0), V(R + 1.1, yBot - 0.08, 0), 0.07, ppm));
-    var xv = valve(V(R + 0.55, yBot + 0.15, 0), "x", ""); xv.setFrac(0.5); ptank.add(xv);
+    ptank.add(tube(V(R + 1.1, yBot + 0.15, 0), V(R + 1.1, yBot - 0.3, 0), 0.07, ppm));
+    pExportValve = valve(V(R + 0.55, yBot + 0.15, 0), "x", ""); ptank.add(pExportValve);
+    pDrain = new Emitter(ptank, { origin: V(R + 1.1, yBot - 0.3, 0), dir: V(0, -1, 0), speed: 1.6, spread: 0.12, jitter: 0.15, gravity: -2.0, color: 0xd9a441, size: 0.09, life: 0.6, count: 60, rate: 90 });
   })();
 
   var flare = new THREE.Group(); flare.position.set(18.2, 0, 0); rig.add(flare);
@@ -586,6 +590,36 @@
   var pAnchor = new THREE.Object3D(); pAnchor.position.set(14.8, 1.5, 0); rig.add(pAnchor);
   var fAnchor = new THREE.Object3D(); fAnchor.position.set(18.2, 5.8, 0); rig.add(fAnchor);
 
+  // ---- interactive valves (click to open/close, like real hand valves) ----
+  // The crude FILL valve (head of T-101) and the product EXPORT valve (outlet of
+  // P-401) toggle on click; flows + the product level respond. These are on the
+  // cosmetic terminals, so toggling them is purely in the view for now — the
+  // real control-logic + HMI wiring is the next step (ST programs / HMI).
+  var feedOpen = true, exportOpen = true, pLevel = 0.5;
+  var clickables = [], raycaster = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  function makeClickable(group, onToggle) {
+    var hit = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 6),
+      new THREE.MeshBasicMaterial({ visible: false }));
+    group.add(hit); group.userData.onToggle = onToggle; clickables.push(group);
+  }
+  function pick(ev) {
+    var rect = canvas.getBoundingClientRect();
+    ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    var meshes = [];
+    clickables.forEach(function (g) { g.traverse(function (o) { if (o.isMesh) meshes.push(o); }); });
+    var hits = raycaster.intersectObjects(meshes, true);
+    if (!hits.length) return null;
+    var o = hits[0].object;
+    while (o) { if (o.userData && o.userData.onToggle) return o; o = o.parent; }
+    return null;
+  }
+  canvas.addEventListener("pointerdown", function (ev) { var g = pick(ev); if (g) g.userData.onToggle(); });
+  canvas.addEventListener("pointermove", function (ev) { canvas.style.cursor = pick(ev) ? "pointer" : ""; });
+  makeClickable(feedValve, function () { feedOpen = !feedOpen; });
+  makeClickable(pExportValve, function () { exportOpen = !exportOpen; });
+
   // ---- render loop ----
   var clock = new THREE.Clock();
   function resize() {
@@ -619,11 +653,18 @@
     });
 
     // interconnect flows: base throughput + active coupling highlight
-    cFeed.update(0.12 + 0.3 * FEED.tank, false, dt);
+    cFeed.update(feedOpen ? (0.12 + 0.3 * FEED.tank) : 0, false, dt);  // crude supply frozen when valve shut
     cTR.update(0.10 + 0.3 * FEED.tank, COUP.tank_reactor, dt);
     cRV.update(0.16, COUP.reactor_vessel, dt);
     cProd.update(0.14, false, dt);
-    feedValve.setFrac(FEED.tank);   // crude fill valve tracks the tank's feed
+    // product tank: bottoms keep arriving; the export valve draws it down
+    pLevel += (0.030 - (exportOpen ? 0.055 : 0)) * dt;
+    pLevel = Math.max(0, Math.min(1, pLevel));
+    pLiq.scale.y = Math.max(0.001, pLevel);
+    pLiq.position.y = pTankBot + pLevel * pTankH * 0.92 / 2;
+    pDrain.active = exportOpen && pLevel > 0.001; pDrain.update(dt);
+    pExportValve.setFrac(exportOpen ? 0.65 : 0);
+    feedValve.setFrac(feedOpen ? Math.max(0.2, FEED.tank) : 0);
     flareFlame.update(dt);
 
     resize(); renderer.render(scene, camera);
