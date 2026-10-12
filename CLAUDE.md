@@ -81,7 +81,7 @@ Pick/run a scenario with the `tank|vessel|reactor` arg or `PETROTWIN_SCENARIO`.
   stay byte-for-byte logically identical to the ST programs.
 
 ## Repo conventions
-- Docs in repo root: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / this file.
+- Docs in repo root: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / ATTACKS / this file.
 - One authoritative Modbus register map (ARCHITECTURE.md); no scattered addresses.
 - Keep claims consistent across all docs.
 
