@@ -11,9 +11,10 @@ Two implementations behind one small interface:
   Same interface, so the bridge code is identical for fake and real PLCs.
 
 The fake PLCs and the ST programs must stay in lock-step: if one changes, change
-the other. ``FakeSis`` is given the scenario's high-high trip threshold in
-register units (``scenario.trip_reg``), which mirrors the ``TRIP_HH`` constant
-compiled into the matching ``plc/sis/sis_<scenario>.st`` program.
+the other. Both ``FakeBpcs`` and ``FakeSis`` take the whole ``scenario`` (the
+single source of truth) and derive the exact constants the loader substitutes
+into the matching ST programs (control gains + setpoint clamp for the BPCS;
+trip / pre-alarm / reset-deadband / full-scale for the SIS).
 """
 
 from __future__ import annotations
@@ -137,19 +138,29 @@ class FakeBpcs:
 
 
 class FakeSis:
-    """In-memory Safety PLC — mirrors plc/sis/sis_<scenario>.st.
+    """In-memory Safety PLC — mirrors plc/sis/sis.st.
 
-    ``trip_hh_reg`` is the high-high trip threshold in register units
-    (``scenario.trip_reg``), the same constant compiled into the matching ST
-    program. Logic (latched high-high trip + override force/bypass) is identical
-    across scenarios; only this threshold differs.
+    Byte-for-byte logical twin of the ST program. Takes the whole ``scenario``
+    (the single source of truth) and derives the trip / pre-alarm / reset-
+    deadband / full-scale thresholds the matching ST constants are substituted
+    from. Implements the latched high-high trip, the maintenance BYPASS
+    (``override``) that suppresses the trip and freezes the HMI, the pre-alarm
+    "H", a bad-PV fail-safe trip, a deadband-gated manual reset, and the
+    block-valve final element (``blk_out = blk_open_cmd AND NOT trip``).
     """
 
-    def __init__(self, trip_hh_reg: int) -> None:
-        self.trip_hh_reg = int(trip_hh_reg)
+    def __init__(self, scenario) -> None:
+        self.scenario = scenario
+        self.trip_hh_reg = int(scenario.trip_reg)
         self._coil = {int(R.SisCoil.TRIP_CMD): False,
                       int(R.SisCoil.TRIP_STATUS): False,
-                      int(R.SisCoil.OVERRIDE): False}
+                      int(R.SisCoil.OVERRIDE): False,
+                      int(R.SisCoil.RESET): False,
+                      int(R.SisCoil.PREALARM_H): False,
+                      int(R.SisCoil.PV_BAD): False,
+                      int(R.SisCoil.BLK_OPEN_CMD): False,
+                      int(R.SisCoil.BLK_OUT): False,
+                      int(R.SisCoil.BYPASS_ACTIVE): False}
         self._holding = {int(R.SisHolding.PV): 0,
                          int(R.SisHolding.PV_HMI): 0}
         self._tripped = False  # latched trip state
@@ -167,19 +178,35 @@ class FakeSis:
         self._holding[int(addr)] = int(value)
 
     def scan(self) -> None:
-        override = self._coil[int(R.SisCoil.OVERRIDE)]
-        if override:
-            # Compromised: suppress trip, freeze operator view.
-            self._coil[int(R.SisCoil.TRIP_CMD)] = False
-            self._coil[int(R.SisCoil.TRIP_STATUS)] = False
+        sc = self.scenario
+        H, C = self._holding, self._coil
+        pv = H[int(R.SisHolding.PV)]
+        tr = self.trip_hh_reg
+
+        # transmitter validity + pre-alarm (both gated on a good PV)
+        bad = (pv < 0) or (pv > sc.reg_full_scale)   # PV_MIN=0, PV_MAX=full scale
+        C[int(R.SisCoil.PV_BAD)] = bad
+        C[int(R.SisCoil.PREALARM_H)] = (not bad) and pv >= sc.pre_alarm_h_reg
+        C[int(R.SisCoil.BYPASS_ACTIVE)] = C[int(R.SisCoil.OVERRIDE)]
+
+        if C[int(R.SisCoil.OVERRIDE)]:
+            # Bypass (abused): suppress trip, freeze operator view.
+            C[int(R.SisCoil.TRIP_CMD)] = False
+            C[int(R.SisCoil.TRIP_STATUS)] = False
             # PV_HMI deliberately not refreshed -> holds its last value.
         else:
-            if self._holding[int(R.SisHolding.PV)] >= self.trip_hh_reg:
+            if pv >= tr or bad:                       # fail-safe on bad PV
                 self._tripped = True
-            self._coil[int(R.SisCoil.TRIP_CMD)] = self._tripped
-            self._coil[int(R.SisCoil.TRIP_STATUS)] = self._tripped
-            self._holding[int(R.SisHolding.PV_HMI)] = \
-                self._holding[int(R.SisHolding.PV)]
+            if (self._tripped and C[int(R.SisCoil.RESET)] and (not bad)
+                    and pv < tr - sc.reset_db_reg):   # deadband-gated reset
+                self._tripped = False
+            C[int(R.SisCoil.TRIP_CMD)] = self._tripped
+            C[int(R.SisCoil.TRIP_STATUS)] = self._tripped
+            H[int(R.SisHolding.PV_HMI)] = pv
+
+        # block-valve final element: operator opens it, the trip shuts it
+        C[int(R.SisCoil.BLK_OUT)] = (
+            C[int(R.SisCoil.BLK_OPEN_CMD)] and (not C[int(R.SisCoil.TRIP_CMD)]))
 
     def close(self) -> None:
         pass

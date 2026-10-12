@@ -33,7 +33,7 @@ ALL = scenarios.ids()
 def make_bridge(sid):
     """A primed bridge: PLCs wired, safe operator setpoint seeded."""
     sc = scenarios.get(sid)
-    b = Bridge(make_model(sid), FakeBpcs(sc), FakeSis(sc.trip_reg), dt=DT)
+    b = Bridge(make_model(sid), FakeBpcs(sc), FakeSis(sc), dt=DT)
     b.prime_setpoint()
     return b
 

@@ -33,6 +33,12 @@ SIS_URL = "http://127.0.0.1:8082"
 # Matches the `TRIP_HH : INT := <n>;` line the SIS template promises to keep.
 _TRIP_RE = re.compile(r"(TRIP_HH\s*:\s*INT\s*:=\s*)\d+(\s*;)")
 
+# The other per-scenario SIS constants, in the form `NAME : INT := <n>;`
+# (PV_MIN is fixed at 0 and intentionally NOT substituted).
+_SIS_INT_CONSTS = (("PRE_ALARM_H", "pre_alarm_h_reg"),
+                   ("RESET_DB", "reset_db_reg"),
+                   ("PV_MAX", "reg_full_scale"))
+
 # The BPCS control constants the template promises to keep, in the form
 # `NAME : DINT := <n>;` (KP_NUM is signed).
 _BPCS_CONSTS = (("BIAS_PM", "ctrl_bias_pm"),
@@ -48,12 +54,19 @@ _BPCS_INT_CONSTS = (("SP_LO", "sp_lo_reg"),
 def sis_program_for(scenario_id: str) -> str:
     """The SIS ST program for a scenario: the template with TRIP_HH substituted."""
     sc = scenarios.get(scenario_id)
-    template = SIS_TEMPLATE.read_text()
-    new_text, n = _TRIP_RE.subn(rf"\g<1>{sc.trip_reg}\g<2>", template, count=1)
+    new_text = SIS_TEMPLATE.read_text()
+    new_text, n = _TRIP_RE.subn(rf"\g<1>{sc.trip_reg}\g<2>", new_text, count=1)
     if n != 1:
         raise SystemExit(
             "could not find the 'TRIP_HH : INT := <n>;' line in "
             f"{SIS_TEMPLATE} to substitute the scenario trip threshold")
+    for const, attr in _SIS_INT_CONSTS:
+        pat = re.compile(rf"({const}\s*:\s*INT\s*:=\s*)-?\d+(\s*;)")
+        new_text, n = pat.subn(rf"\g<1>{getattr(sc, attr)}\g<2>", new_text, count=1)
+        if n != 1:
+            raise SystemExit(
+                f"could not find the '{const} : INT := <n>;' line in "
+                f"{SIS_TEMPLATE} to substitute the scenario SIS constant")
     return new_text
 
 

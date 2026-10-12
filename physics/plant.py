@@ -52,6 +52,7 @@ Scope / honesty (Phase 1 is plausible, not validated — see ROADMAP.md):
 from __future__ import annotations
 
 from physics import make_model
+from physics.product import ProductTankModel
 from physics.reactor import ReactorModel
 from physics.tank import TankModel
 from physics.vessel import VesselModel
@@ -106,6 +107,11 @@ class PlantModel:
             "reactor": self.reactor,
             "vessel": self.vessel,
         }
+        # P-401 product-storage tank: the terminal sink (V-201 bottoms -> P-401
+        # -> export). Not a BPCS/SIS unit and not in FLOW; a plain downstream
+        # level with an operator EXPORT valve.
+        self.product = ProductTankModel()
+        self.export_open = True
         # Last couplings applied, exposed for the HMI/3D and tests.
         self.q_coupling = 0.0
         self.p_coupling = 0.0
@@ -131,6 +137,8 @@ class PlantModel:
         """Return every unit to its initial condition and clear couplings."""
         for _, m in self.units:
             m.reset()
+        self.product.reset()
+        self.export_open = True
         self.q_coupling = 0.0
         self.p_coupling = 0.0
         self.time = 0.0
@@ -165,6 +173,10 @@ class PlantModel:
             feed_cmd, trip = commands.get(uid, (0.0, False))
             m.step(dt, feed_cmd=feed_cmd, trip=bool(trip))
 
+        # 3. Step the terminal product tank (steady fill from V-201 bottoms,
+        #    drawn down through the operator EXPORT valve).
+        self.product.step(dt, export_open=self.export_open)
+
         self.time += dt
 
     # --- read-outs -----------------------------------------------------------
@@ -180,7 +192,7 @@ class PlantModel:
         """Per-unit ground-truth snapshot (for the HMI/3D view and tests)."""
         out = {"time": self.time,
                "q_coupling": self.q_coupling, "p_coupling": self.p_coupling,
-               "units": {}}
+               "units": {}, "product": self.product.snapshot()}
         for uid, m in self.units:
             sc = m.scenario
             out["units"][uid] = {
@@ -192,4 +204,6 @@ class PlantModel:
                 "failed": m.failed,
                 "applied_feed": m.applied_feed,
             }
+        # The tank's block/fill valve state (driven by its SIS in the bridge).
+        out["units"]["tank"]["fill_open"] = self.tank.fill_open
         return out

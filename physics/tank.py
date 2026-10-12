@@ -63,6 +63,11 @@ class TankModel:
     spilled_volume: float = field(init=False)
     time: float = field(init=False)
     applied_feed: float = field(init=False)
+    # Block/fill valve in series with the control valve. True = open (the
+    # standalone default, so single-unit behaviour is unchanged). In the
+    # connected plant the tank's SIS block-valve final element drives this, so a
+    # trip physically shuts the feed even apart from the ``trip`` command.
+    fill_open: bool = field(init=False)
 
     def __post_init__(self) -> None:
         self._validate()
@@ -84,6 +89,7 @@ class TankModel:
         self.spilled_volume = 0.0
         self.time = 0.0
         self.applied_feed = 0.0
+        self.fill_open = True
 
     # --- Derived quantities ---
     @property
@@ -121,15 +127,17 @@ class TankModel:
         """Advance the model by ``dt`` seconds under the layer commands.
 
         ``feed_cmd`` is the BPCS feed-valve fraction in [0, 1] (values outside
-        are clamped). ``trip`` is the SIS protective action: a trip forces the
-        feed shut, so the effective feed is ``0 if trip else feed_cmd``. Returns
-        the new level. Explicit Euler — exact for this constant-derivative ODE,
-        so the result is timestep-independent away from the clamps.
+        are clamped). ``trip`` is the SIS protective action and ``fill_open`` is
+        the block/fill valve in series with it: a trip OR a shut block valve
+        forces the feed to zero, so the effective feed is
+        ``0 if (trip or not fill_open) else feed_cmd``. Returns the new level.
+        Explicit Euler — exact for this constant-derivative ODE, so the result
+        is timestep-independent away from the clamps.
         """
         if dt <= 0:
             raise ValueError("dt must be > 0")
 
-        effective_feed = 0.0 if trip else feed_cmd
+        effective_feed = 0.0 if (trip or not self.fill_open) else feed_cmd
         self.applied_feed = _clamp(effective_feed, 0.0, 1.0)
         q_in = self.inflow(effective_feed)
         dLdt = (q_in - self.q_out) / self.area

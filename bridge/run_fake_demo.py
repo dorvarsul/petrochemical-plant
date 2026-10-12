@@ -44,7 +44,7 @@ def main() -> None:
     sid = _pick_scenario(sys.argv)
     sc = scenarios.get(sid)
     model = make_model(sid)
-    b = Bridge(model, FakeBpcs(sc), FakeSis(sc.trip_reg), dt=DT)
+    b = Bridge(model, FakeBpcs(sc), FakeSis(sc), dt=DT)
     b.prime_setpoint()  # operator's safe setpoint; baseline holds here until the attack
 
     print(f"PetroTwin divergence demo (fake PLCs) — {sc.title} [{sc.unit_tag}]")
