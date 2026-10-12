@@ -1,12 +1,19 @@
 """PetroTwin whole-plant server (Phase 2) — the entire connected flowsheet.
 
-Where ``ui/server.py`` drives ONE unit against the live OpenPLC pair, this
-server runs the **connected plant** (T-101 feed tank -> R-301 reactor -> V-201
-vessel) through the dependency-free ``PlantBridge`` (one in-memory BPCS + SIS
-per unit) and serves a single dashboard that shows **all three units at once**:
+Runs the **connected plant** (T-101 feed tank -> R-301 reactor -> V-201 vessel)
+through ``PlantBridge`` and serves a single dashboard that shows **all three
+units at once**:
 
   * ``truth`` per unit comes from the physics (the 3D view) — unspoofable.
   * ``hmi``   per unit comes from that unit's SIS registers — spoofable.
+
+In LIVE mode (``--live`` / ``PETROTWIN_LIVE=1``) the three units run on the REAL
+OpenPLC pair over Modbus — one BPCS slave carries control for all three and one
+SIS slave carries safety, each unit in its own offset register block (see
+``bridge.plc_io.ModbusUnitView`` and the generated programs in
+``plc.load_scenario.load_plant``). Without it, or if the containers/pymodbus are
+unavailable, it falls back to the dependency-free fake-PLC path (one in-memory
+BPCS + SIS per unit). The snapshot's ``live`` block reports which path is active.
 
 The operator can attack ANY ONE unit (BPCS forced to MANUAL + SIS bypass, or
 manual-drive-with-SIS-armed for the defence-in-depth contrast), toggle the
@@ -17,8 +24,9 @@ downstream — exactly the Phase-1 story, now watchable as one flowsheet.
 All plant/Modbus access stays in the one background thread; HTTP handlers only
 read the latest snapshot and set flags, so there is no concurrency on the bridge.
 
-Run (needs only the venv — no Docker/OpenPLC):
-    .venv/bin/python -m ui.plant_server
+Run:
+    .venv/bin/python -m ui.plant_server            # fake PLCs (no Docker)
+    .venv/bin/python -m ui.plant_server --live     # real OpenPLC (both containers up)
 then open http://127.0.0.1:8092/
 """
 
@@ -30,12 +38,19 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from bridge.plant_bridge import make_fake_plant_bridge
+import os
+
+from bridge.plant_bridge import make_fake_plant_bridge, make_live_plant_bridge
 from physics.plant import FLOW
 
 STATIC = Path(__file__).parent / "static"
 HOST, PORT = "127.0.0.1", 8092
+BPCS_WEB, SIS_WEB = "http://127.0.0.1:8081", "http://127.0.0.1:8082"
 DT, SETTLE = 1.0, 0.12      # sim-seconds per step / real-seconds between steps
+# LIVE: drive the two REAL OpenPLC slaves (one BPCS + one SIS carrying all three
+# units) instead of the in-memory fake PLCs. Set via --live or PETROTWIN_LIVE=1;
+# falls back to the fake path if the containers/pymodbus are unavailable.
+LIVE = os.environ.get("PETROTWIN_LIVE", "") not in ("", "0", "false", "False")
 EPS_COUPLING = 1e-3         # a coupling above this reads as "active" (propagating);
                             # above baseline integrator residual, below real drive
 
@@ -62,7 +77,10 @@ class PlantRunner(threading.Thread):
         self._pending = []          # queued (verb, unit, bypass) requests
         self._reset = False
         self._stop = False
-        self.bridge = make_fake_plant_bridge(dt=DT)
+        # live-connection health, published in the snapshot so the HMI can show
+        # whether it is talking to real OpenPLC (both slaves up) or the fake path.
+        self._live = {"enabled": False, "bpcs": False, "sis": False}
+        self.bridge = self._build_bridge(load=True)
         # which unit the LAST attack request targeted (headline only); external
         # attacks still surface per-unit via each unit's `attacked` flag.
         self._target = None
@@ -70,6 +88,26 @@ class PlantRunner(threading.Thread):
         # dashboard can show the spoof gap against the value the operator saw.
         self._frozen = {}
         self._snap = self._build_snapshot(status="running")
+
+    # --- bridge construction (live OpenPLC, with fake fallback) -----------
+    def _build_bridge(self, load: bool):
+        """Build the plant bridge. In LIVE mode: (optionally) load the two
+        multi-unit programs, then connect over Modbus; on any failure fall back
+        to the dependency-free fake path so the view still runs."""
+        if LIVE:
+            try:
+                if load:
+                    from plc.load_scenario import load_plant
+                    load_plant(BPCS_WEB, SIS_WEB)  # self-loads both PLC programs
+                bridge = make_live_plant_bridge(dt=DT)
+                self._live = {"enabled": True, "bpcs": True, "sis": True}
+                return bridge
+            except Exception as e:  # pymodbus missing / containers down / load failed
+                print(f"[plant_server] LIVE unavailable ({e}); using fake PLCs")
+                self._live = {"enabled": False, "bpcs": False, "sis": False}
+        else:
+            self._live = {"enabled": False, "bpcs": False, "sis": False}
+        return make_fake_plant_bridge(dt=DT)
 
     # --- control surface (called from HTTP handlers) ----------------------
     def request_attack(self, unit, bypass=True):
@@ -200,6 +238,7 @@ class PlantRunner(threading.Thread):
             },
             "units": units,
             "product": product,
+            "live": dict(self._live),
         }
 
     def _apply_pending(self):
@@ -230,15 +269,43 @@ class PlantRunner(threading.Thread):
                 with self._lock:
                     self._reset = False
                     self._pending = []
-                # A fresh bridge clears every latched PLC state + couplings.
-                self.bridge = make_fake_plant_bridge(dt=DT)
                 self._target = None
                 self._frozen = {}
+                if self._live["enabled"]:
+                    # Restart both runtimes (clears latched trips + forced coils),
+                    # then reconnect+reprime. Programs stay loaded, so load=False.
+                    try:
+                        from plc.load_program import restart_runtime
+                        self.bridge.close()
+                        restart_runtime(BPCS_WEB)
+                        restart_runtime(SIS_WEB)
+                    except Exception as e:
+                        print(f"[plant_server] live reset error: {e}")
+                    self.bridge = self._build_bridge(load=False)
+                else:
+                    # A fresh fake bridge clears every latched state + couplings.
+                    self.bridge = make_fake_plant_bridge(dt=DT)
                 with self._lock:
                     self._snap = self._build_snapshot(status="running")
                 continue
             self._apply_pending()
-            sample = self.bridge.step()
+            try:
+                sample = self.bridge.step()
+                if self._live["enabled"] and not (self._live["bpcs"] and self._live["sis"]):
+                    self._live["bpcs"] = self._live["sis"] = True  # recovered
+            except Exception as e:
+                # Modbus hiccup: mark the live link down and try to reconnect
+                # (rebuilds clients; the PLCs retain their state across this).
+                if self._live["enabled"]:
+                    self._live["bpcs"] = self._live["sis"] = False
+                    print(f"[plant_server] live step error: {e}; reconnecting")
+                    try:
+                        self.bridge.close()
+                    except Exception:
+                        pass
+                    self.bridge = self._build_bridge(load=False)
+                time.sleep(0.5)
+                continue
             snap = self._build_snapshot(status="running", sample=sample)
             with self._lock:
                 self._snap = snap
@@ -306,11 +373,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global RUNNER
+    global RUNNER, LIVE
+    import sys
+    if "--live" in sys.argv[1:]:
+        LIVE = True
     RUNNER = PlantRunner()
     RUNNER.start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"PetroTwin whole-plant view on http://{HOST}:{PORT}/  (Ctrl-C to stop)")
+    mode = "LIVE OpenPLC" if LIVE else "fake PLCs"
+    print(f"PetroTwin whole-plant view ({mode}) on http://{HOST}:{PORT}/  (Ctrl-C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

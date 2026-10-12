@@ -142,17 +142,26 @@ fitted to plant data. Validated connected physics is the final OpenModelica phas
 (`ROADMAP.md`). Phase 1 acceptance runs on the in-memory PLCs, exactly as the
 Phase-0.5 acceptance does (§5).
 
-The **whole-plant visualization** (Phase 2) is now implemented on that same
-in-memory-PLC path: `python3 -m ui.plant_server` (port 8092) serves a live view
-in which all seven criteria above are *watchable* as one flowsheet — a spoofable
-per-unit HMI tile strip (each polled from that unit's SIS) over one unspoofable
-3D ground-truth train (T-101 → R-301 → V-201), with the attacked unit
-highlighted and the forward couplings animated as the interconnecting streams.
-Attack any unit from the page (full attack, or the manual-drive-with-SIS-armed
+The **whole-plant visualization** (Phase 2) runs on that same in-memory-PLC path
+and on the **live OpenPLC pair**: `./run_plant.sh start` (or
+`python3 -m ui.plant_server [--live]`, port 8092) serves a view in which all
+seven criteria above are *watchable* as one flowsheet — a spoofable per-unit HMI
+tile strip (each polled from that unit's SIS) over one unspoofable 3D
+ground-truth train (T-101 → R-301 → V-201), with the attacked unit highlighted
+and the forward couplings animated as the interconnecting streams. Attack any
+unit from the page (full attack, or the manual-drive-with-SIS-armed
 defence-in-depth contrast), toggle the FILL/EXPORT valves, and reset a latched
-trip; the HMI tiles carry mode/alarm/bypass chips and a live P-401 level. The LIVE
-OpenPLC multi-unit stack (three BPCS+SIS pairs over Modbus) remains the rest of
-Phase 2.
+trip; the HMI tiles carry mode/alarm/bypass chips and a live P-401 level, and a
+header chip shows whether the data is from real OpenPLC or the fake fallback.
+
+The **live OpenPLC stack** carries all three units on the two existing slaves —
+one BPCS for all three units' control, one SIS for all three units' safety — via
+per-unit offset register blocks (`registers.unit_addr`, applied by
+`bridge.plc_io.ModbusUnitView`) and one generated 3-instance ST program per slave
+(`plc.load_scenario.load_plant`). Verified opt-in by `tests/test_plant_live.py`
+(`PETROTWIN_LIVE=1`): baseline holds all three at setpoint on the real BPCS, and
+attacking one unit opens a spoof gap (true PV diverges from the frozen, armed HMI)
+while the other two hold. Phase 2 is complete.
 
 ## Scope note
 

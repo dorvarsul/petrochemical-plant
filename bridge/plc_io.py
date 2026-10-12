@@ -271,3 +271,40 @@ class ModbusPlc:
 
     def close(self) -> None:
         self._client.close()
+
+
+class ModbusUnitView:
+    """A :class:`PlcClient` for ONE unit sharing a real OpenPLC slave.
+
+    The connected whole-plant view runs three units on two slaves (one BPCS, one
+    SIS). Each unit's registers live in its own offset block within the shared
+    slave, so this wrapper holds the shared :class:`ModbusPlc` plus the unit's
+    index and projects every address through :func:`registers.unit_addr` — the
+    same offset the generated multi-unit ST program uses. ``PlantBridge`` is thus
+    unchanged: it still passes the bare single-unit enum addresses per unit.
+
+    Three views (tank/reactor/vessel) share one underlying client, so ``close``
+    is idempotent (pymodbus ``close`` tolerates repeat calls).
+    """
+
+    def __init__(self, plc: ModbusPlc, unit_index: int) -> None:
+        self._plc = plc
+        self._u = int(unit_index)
+
+    def read_coil(self, addr: int) -> bool:
+        return self._plc.read_coil(R.unit_addr("coil", int(addr), self._u))
+
+    def write_coil(self, addr: int, value: bool) -> None:
+        self._plc.write_coil(R.unit_addr("coil", int(addr), self._u), bool(value))
+
+    def read_holding(self, addr: int) -> int:
+        return self._plc.read_holding(R.unit_addr("holding", int(addr), self._u))
+
+    def write_holding(self, addr: int, value: int) -> None:
+        self._plc.write_holding(R.unit_addr("holding", int(addr), self._u), int(value))
+
+    def scan(self) -> None:
+        pass  # the real PLC scans autonomously
+
+    def close(self) -> None:
+        self._plc.close()

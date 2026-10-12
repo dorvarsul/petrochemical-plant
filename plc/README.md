@@ -93,6 +93,25 @@ The loader substitutes the per-scenario constants into both programs: BPCS
 `BIAS_PM`/`KP_NUM`/`KP_DEN` + the clamp `SP_LO`/`SP_HI`; SIS `TRIP_HH` +
 `PRE_ALARM_H`/`RESET_DB`/`PV_MAX` (`RATE_LIM`/`PV_MIN` are fixed).
 
+### Connected plant: one program, three units per slave
+
+The addresses above are the **single-unit block** (unit 0). The connected
+whole-plant view runs all three units on these same two slaves — one BPCS for all
+three units' control, one SIS for all three units' safety — by giving each unit
+its own **offset block**: `registers.unit_addr` adds a per-unit stride
+(`COIL_STRIDE=16`, `MW_STRIDE=16`, `QW_STRIDE=8`; unit 0 = tank unchanged,
+reactor +1, vessel +2). `plc.load_scenario.load_plant` generates one ST program
+per slave with **three POU instances** (`prog_tank`/`prog_reactor`/`prog_vessel`
+on one 100 ms task) at the matching located addresses — e.g. BPCS `pv` at
+`%MW0`/`%MW16`/`%MW32`, `man_mode` at `%QX0.0`/`%QX2.0`/`%QX4.0`. Load it with:
+
+```bash
+python3 -m plc.load_scenario --plant     # all three units into both PLCs
+```
+
+`ui/plant_server.py --live` (and `run_plant.sh start`) call this on startup, then
+drive the units over Modbus through `bridge.plc_io.ModbusUnitView`.
+
 ## Stop / reset
 
 ```bash

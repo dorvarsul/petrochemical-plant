@@ -37,12 +37,20 @@ three into ONE connected flowsheet — `T-101` → `R-301` → `V-201`, forward-
 Python + in-memory-PLC path: `physics/plant.py`, `bridge/plant_bridge.py`,
 `bridge/run_plant_demo.py`, `tests/test_plant.py`. Couplings are zero at the
 baseline operating point, so the whole plant holds a connected steady state; each
-scenario is "which unit the attacker targets". Phase 2's whole-plant view is now
-built on that same fake-PLC path (`ui/plant_server.py` + `ui/static/plant.html`;
-`python3 -m ui.plant_server`, port 8092) — a spoofable three-tile HMI strip over
-one unspoofable 3D ground-truth train of the whole flowsheet, attack any unit,
-forward couplings animated. The live OpenPLC multi-unit stack remains the rest of
-Phase 2; OpenModelica is the FINAL phase.
+scenario is "which unit the attacker targets". Phase 2's whole-plant view runs on
+that fake-PLC path AND on the live OpenPLC pair (`ui/plant_server.py` +
+`ui/static/plant.html`; `./run_plant.sh start`, or `python3 -m ui.plant_server
+[--live]`, port 8092) — a spoofable three-tile HMI strip over one unspoofable 3D
+ground-truth train of the whole flowsheet, attack any unit, forward couplings
+animated, with a header chip showing live-OpenPLC-vs-fake. The LIVE stack carries
+all three units on the TWO existing slaves — one BPCS for all three units'
+control, one SIS for all three units' safety — via per-unit OFFSET register blocks
+(`registers.unit_addr`, applied by `bridge/plc_io.py` `ModbusUnitView`) and one
+GENERATED 3-instance ST program per slave (`plc/load_scenario.py` `load_plant`);
+no extra containers, single-unit map stays canonical (unit 0 = tank). Proven by
+`tests/test_plant_live.py`. Phase 2 is DONE; OpenModelica is the FINAL phase.
+`run_plant.sh start|stop` is the one-command runner (containers up + serve + open
+tab; fake fallback if no Docker).
 - Tank overfill → high-level trip (single ODE: level; the anchor)
 - Vessel overpressure → relief valve (single ODE: pressure)
 - Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)

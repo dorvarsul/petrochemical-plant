@@ -243,3 +243,26 @@ def make_fake_plant_bridge(dt: float = 0.1) -> PlantBridge:
     b = PlantBridge(plant, controllers, dt=dt)
     b.prime_setpoints()
     return b
+
+
+def make_live_plant_bridge(dt: float = 0.1) -> PlantBridge:
+    """A fully wired connected plant on the REAL OpenPLC pair (two slaves).
+
+    One BPCS slave carries control for all three units and one SIS slave carries
+    safety for all three; each unit addresses its own offset block via
+    :class:`bridge.plc_io.ModbusUnitView`. The two generated multi-unit programs
+    must already be loaded and running (see ``plc.load_scenario.load_plant``).
+    Needs pymodbus and both OpenPLC containers up.
+    """
+    from bridge.plc_io import ModbusPlc, ModbusUnitView
+
+    plant = PlantModel()
+    bpcs = ModbusPlc.for_instance(R.Instance.BPCS)
+    sis = ModbusPlc.for_instance(R.Instance.SIS)
+    controllers = {}
+    for uid, _m in plant.units:
+        u = R.UNIT_INDEX[uid]
+        controllers[uid] = (ModbusUnitView(bpcs, u), ModbusUnitView(sis, u))
+    b = PlantBridge(plant, controllers, dt=dt)
+    b.prime_setpoints()
+    return b

@@ -16,6 +16,8 @@
            border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.3px; }
   header .meta { color:var(--dim); font-size:13px; }
+  .livechip { font-size:12px; font-weight:600; padding:2px 8px; border-radius:10px;
+              border:1px solid #2a3a4a; color:#8aa0b5; white-space:nowrap; }
   header .spacer { flex:1; }
   label.ctl { color:var(--dim); font-size:13px; display:inline-flex; align-items:center; gap:6px; }
   select, button { font:inherit; font-weight:600; border:1px solid var(--line);
@@ -78,6 +80,7 @@
   <header>
     <h1>PetroTwin · Connected Plant</h1>
     <span class="meta">T-101 → R-301 → V-201 · <span id="clock">t = 0.0 s</span></span>
+    <span id="liveChip" class="livechip" title="Data source: real OpenPLC over Modbus, or the fake-PLC fallback">● connecting…</span>
     <span class="spacer"></span>
     <label class="ctl">target
       <select id="unitSel">
@@ -781,6 +784,7 @@
   var el = function (id) { return document.getElementById(id); };
   var strip = el("hmiStrip"), labels = el("labels");
   var clockEl = el("clock"), chip = el("attackChip"), legendTail = el("legendTail");
+  var liveChip = el("liveChip");
   var btnAttack = el("btnAttack"), btnStand = el("btnStand"), btnReset = el("btnReset");
   var btnSisReset = el("btnSisReset");
   var unitSel = el("unitSel"), spArmed = el("spArmed"), rupture = el("rupture");
@@ -890,6 +894,19 @@
   function render(st) {
     if (!built) buildStrip(st);
     clockEl.textContent = "t = " + st.time.toFixed(1) + " s";
+
+    // data-source indicator: real OpenPLC over Modbus vs. the fake-PLC fallback
+    var lv = st.live || {};
+    if (lv.enabled && lv.bpcs && lv.sis) {
+      liveChip.textContent = "● LIVE OpenPLC — BPCS+SIS connected";
+      liveChip.style.color = "#5fd38a"; liveChip.style.borderColor = "#2f6b47";
+    } else if (lv.enabled) {
+      liveChip.textContent = "● OpenPLC link down — reconnecting";
+      liveChip.style.color = "#ff8b8b"; liveChip.style.borderColor = "#6b2f2f";
+    } else {
+      liveChip.textContent = "● SIM — fake PLCs";
+      liveChip.style.color = "#d8b65f"; liveChip.style.borderColor = "#6b5a2f";
+    }
     COUP.tank_reactor = st.couplings.tank_reactor.active;
     COUP.reactor_vessel = st.couplings.reactor_vessel.active;
 

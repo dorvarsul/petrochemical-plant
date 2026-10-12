@@ -186,3 +186,45 @@ def valve_to_reg(fraction: float) -> int:
 def reg_to_valve(reg: int) -> float:
     """Valve register (per-mille) -> fraction [0,1], clamped."""
     return _clamp(reg / VALVE_PER_MILLE, 0.0, 1.0)
+
+
+# --- Multi-unit addressing (connected-plant LIVE path) ---------------------
+# The register map above is the single-unit block: exactly one PV/BPCS/SIS set,
+# addressed from zero. The connected whole-plant view runs THREE units (tank,
+# reactor, vessel) on just TWO OpenPLC slaves — one BPCS carrying control for
+# all three, one SIS carrying safety for all three. Each unit gets its own block
+# within a slave by adding a per-unit OFFSET to the single-unit addresses, so
+# the three units never collide on the shared Modbus image.
+#
+# The fake-PLC path does NOT use these: there each unit owns a separate in-memory
+# FakeBpcs/FakeSis, so the identical base addresses never collide (see
+# bridge/plant_bridge.py). Offsets are only for the real ModbusPlc path, applied
+# by bridge.plc_io.ModbusUnitView and matched byte-for-byte by the multi-unit ST
+# programs generated in plc/load_scenario.py.
+#
+# Strides are chosen to keep every unit byte-aligned and each unit's writable
+# input coils in its block's byte 0, and to fit OpenPLC v3's default image:
+#   coils  tank %QX0.* / reactor %QX2.* / vessel %QX4.*  (SIS spills to the next
+#          byte: %QX0-1 / %QX2-3 / %QX4-5)               -> max coil 40
+#   %MW    tank %MW0-2 / reactor %MW16-18 / vessel %MW32-34 (holding 1024..1058)
+#   %QW    tank %QW1   / reactor %QW9     / vessel %QW17
+UNIT_INDEX = {"tank": 0, "reactor": 1, "vessel": 2}  # must match physics.plant.FLOW
+COIL_STRIDE = 16   # coils per unit (2 bytes: SIS uses 9 coils, rolls into byte 1)
+MW_STRIDE = 16     # %MW words per unit (BPCS uses 3: PV/SETPOINT/MAN_OUT)
+QW_STRIDE = 8      # %QW words per unit (one each: BPCS FEED_CMD / SIS PV_HMI)
+
+
+def unit_addr(table: str, base_addr: int, unit_index: int) -> int:
+    """Project a single-unit Modbus address into unit ``unit_index``'s block.
+
+    ``table`` is "coil" or "holding"; ``base_addr`` is the single-unit address
+    (an enum value from BpcsCoil/SisCoil/BpcsHolding/SisHolding). Unit 0 (tank)
+    maps to the base address unchanged, so the single-unit map stays canonical.
+    """
+    if unit_index == 0:
+        return int(base_addr)
+    if table == "coil":
+        return int(base_addr) + unit_index * COIL_STRIDE
+    if int(base_addr) >= MW_HOLDING_BASE:        # %MW memory-word band
+        return int(base_addr) + unit_index * MW_STRIDE
+    return int(base_addr) + unit_index * QW_STRIDE  # %QW output band

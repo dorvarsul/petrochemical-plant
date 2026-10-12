@@ -175,18 +175,24 @@ The map encodes one control/attack story, parameterized per scenario — a
 scenarios differ only in the PV, its scaling, the trip threshold, and the
 physical meaning of the protective action:
 
-> **Connected plant (Phase 1, see `ROADMAP.md`).** The register map below is the
-> single-unit map: exactly one PV/BPCS/SIS set, as the standalone sims and the
-> live OpenPLC stack use it. Phase 1 *also* runs all three units as **one
-> flowsheet** — `T-101` feed tank → `R-301` reactor → `V-201` separation vessel,
-> forward-coupled (tank overfill warms the reactor; reactor runaway pressurises
-> the vessel) — with each scenario reframed as *which unit the attack targets*.
-> That connected plant is implemented on the Python + in-memory-PLC path
-> (`physics/plant.py`, `bridge/plant_bridge.py`), where each unit owns its own
-> BPCS+SIS pair with an independent register space, so the identical addresses
-> below never collide. Extending the **live** OpenPLC stack to three unit pairs
-> (this map replicated per unit, plus per-unit ST programs) is Phase 2, alongside
-> the whole-plant visualization. Validated OpenModelica physics is the **final**
+> **Connected plant (Phase 1–2, see `ROADMAP.md`).** The register map below is the
+> **single-unit block**: exactly one PV/BPCS/SIS set, as the standalone sims use
+> it. The connected plant runs all three units as **one flowsheet** — `T-101`
+> feed tank → `R-301` reactor → `V-201` separation vessel, forward-coupled (tank
+> overfill warms the reactor; reactor runaway pressurises the vessel) — with each
+> scenario reframed as *which unit the attack targets*.
+>
+> On the fake-PLC path (`physics/plant.py`, `bridge/plant_bridge.py`) each unit
+> owns its own in-memory BPCS+SIS with an independent register space, so the
+> identical single-unit addresses below never collide. On the **live** path the
+> same three units run on just **two** OpenPLC slaves — one BPCS carries control
+> for all three, one SIS carries safety — by giving each unit its own **offset
+> block** within a slave: `registers.unit_addr(table, base_addr, unit_index)`
+> adds a per-unit stride (unit 0 = tank = the base addresses unchanged; see the
+> *Per-unit offset blocks* table below). `bridge.plc_io.ModbusUnitView` applies
+> the offset so `PlantBridge` passes the bare single-unit addresses, and
+> `plc/load_scenario.py` generates one 3-instance ST program per slave at the
+> matching located addresses. Validated OpenModelica physics is the **final**
 > phase, behind the unchanged `model.step(dt, feed_cmd, trip)` interface.
 
 | Scenario | PV (`reg_scale`) | BPCS actuator (control gain) | SIS trip (`trip_hh`) | Protective action | Failure |
@@ -301,6 +307,26 @@ Holding registers (16-bit, master read/write):
 > a terminal **sink** (a level ODE in `physics/product.py`, fed by steady V-201
 > bottoms, drawn by EXPORT) with LL/LO/HI/HH alarms — not an attack target, so it
 > has no BPCS/SIS pair.
+
+#### Per-unit offset blocks (connected-plant live path)
+
+The table above is the **single-unit block** (unit 0). The connected plant places
+three units on two slaves by adding a per-unit offset via
+`registers.unit_addr(table, base_addr, unit_index)`; unit 0 (tank) is unchanged.
+Strides: `COIL_STRIDE=16`, `MW_STRIDE=16` (`%MW`/holding ≥ 1024 band),
+`QW_STRIDE=8` (`%QW` output band). The generated ST programs declare each unit's
+located variables at exactly these addresses, and `ModbusUnitView` reads/writes
+them for the bridge.
+
+| Unit (`unit_index`) | BPCS/SIS coils | `%MW` (PV/SETPOINT/MAN_OUT · SIS PV) | `%QW` (FEED_CMD · PV_HMI) |
+|---------------------|----------------|--------------------------------------|---------------------------|
+| tank (0)            | `%QX0.*` (SIS `%QX0–1`) | `%MW0–2`  | `%QW1`  |
+| reactor (1)         | `%QX2.*` (SIS `%QX2–3`) | `%MW16–18`| `%QW9`  |
+| vessel (2)          | `%QX4.*` (SIS `%QX4–5`) | `%MW32–34`| `%QW17` |
+
+All three units' registers stay distinct within each slave (no collisions), each
+unit's writable input coils stay in its block's byte 0, and the whole span fits
+OpenPLC v3's default Modbus image (coils ≤ 40, holding ≤ 1058).
 
 > This map is authoritative and lives in code as `common/registers.py` — the bridge,
 > both PLC programs, the HMI, and the attack script import names/addresses from there,

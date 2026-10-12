@@ -34,7 +34,7 @@ plant fidelity (OpenModelica realism is a later phase).
 
 ### Offline — no Docker (pure stdlib)
 ```bash
-python3 -m unittest discover -s tests          # 89 tests (3 live-Modbus skipped)
+python3 -m unittest discover -s tests          # 145 tests (5 live-Modbus skipped)
 python3 -m bridge.run_fake_demo                # tank (default)
 python3 -m bridge.run_fake_demo vessel         # or vessel / reactor
 python3 -m bridge.run_fake_demo reactor        # normal -> attack -> failure, HMI frozen
@@ -44,36 +44,37 @@ python3 -m bridge.run_fake_demo reactor        # normal -> attack -> failure, HM
 flowsheet (T-101 → R-301 → V-201, forward-coupled), on the fake-PLC path:
 ```bash
 python3 -m bridge.run_plant_demo reactor       # terminal: attack one unit, watch the plant respond
-./run_plant.sh start                           # whole-plant view: http://127.0.0.1:8092
-./run_plant.sh stop                            # (start|stop|restart|status; or: python -m ui.plant_server)
+python3 -m ui.plant_server                      # whole-plant view (fake PLCs): http://127.0.0.1:8092
 ```
 The whole-plant view shows a spoofable per-unit HMI strip over one unspoofable
 3D ground-truth train; attack any unit and watch it run to failure while its HMI
 tile stays green and the forward couplings carry the disturbance downstream.
 
-### Live — Docker + real OpenPLC + the dashboard
+### Live — the whole connected plant on real OpenPLC (one command)
+`run_plant.sh` is the one-command runner: it brings up the two OpenPLC v3
+containers, serves the whole-plant view, and opens it in a browser tab. The three
+units run on the **real** PLC pair over Modbus — one BPCS slave carries control
+for all three units, one SIS slave carries safety (each unit in its own offset
+register block). It falls back to the fake-PLC path if Docker is unavailable.
 ```bash
-# 0. Python deps for the live path
+# one-time: Python deps + build the OpenPLC image
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd plc && docker compose build && cd ..
 
-# 1. Build + start the two OpenPLC v3 slaves
-cd plc && docker compose build && docker compose up -d && cd ..
-
-# 2. Load + compile + start the BPCS + the SIS program for a scenario (headless)
-.venv/bin/python -m plc.load_scenario tank     # or vessel / reactor
-
-# 3. (optional) verify the live Modbus round-trip
-PETROTWIN_LIVE=1 .venv/bin/python -m unittest tests.test_bridge_live -v
-
-# 4a. Terminal demo over real Modbus
-.venv/bin/python -m bridge.run_live_demo tank  # or vessel / reactor
-
-# 4b. Or the split-screen dashboard (HMI | 3D ground truth)
-.venv/bin/python -m ui.server    # open http://127.0.0.1:8090 , pick a scenario, "Inject attack"
+./run_plant.sh start      # containers up + load multi-unit programs + serve http://127.0.0.1:8092
+./run_plant.sh stop       # (start|stop|restart|status)
 ```
+The header shows a live-connection chip (**LIVE OpenPLC — BPCS+SIS connected**,
+or **SIM — fake PLCs** on the fallback). Equivalent to
+`.venv/bin/python -m ui.plant_server --live` once the containers are up.
 
-The dashboard loads the chosen scenario's PLC programs itself (step 2 is for the
-terminal demo / tests); its dropdown switches scenarios live by recompiling the PLCs.
+**Single-unit live demos / tests** still use the per-scenario programs:
+```bash
+cd plc && docker compose up -d && cd ..
+.venv/bin/python -m plc.load_scenario tank      # one scenario; or --plant for all three units
+.venv/bin/python -m bridge.run_live_demo tank   # terminal demo over real Modbus
+PETROTWIN_LIVE=1 .venv/bin/python -m unittest tests.test_bridge_live tests.test_plant_live -v
+```
 
 **Baseline vs. attack.** With no attacker the BPCS holds the process at its safe
 setpoint and the SIS never trips — the baseline just runs. The BPCS now **clamps**
@@ -96,15 +97,18 @@ PVHI/PVLO), and a live **P-401** product-tank level.
 ## Layout
 ```
 common/       scenarios.py — per-scenario truth (PV, scaling, thresholds, physics)
-              registers.py — authoritative Modbus map   + tests/test_{scenarios,registers}.py
+              registers.py — authoritative Modbus map + per-unit offsets (unit_addr)
+              + tests/test_{scenarios,registers,registers_multiunit}.py
 physics/      base.py + tank.py / vessel.py / reactor.py ODE models (ground truth)
               make_model(id) factory   + tests/test_{tank,vessel,reactor}.py
-plc/          bpcs.st (setpoint-control template), sis.st (trip template), load_scenario.py,
-              docker-compose (OpenPLC v3)   + tests/test_plc_programs.py
-bridge/       scenario-agnostic Modbus bridge loop; fake + real PLC clients; demos
-              + tests/test_bridge.py (fake) / test_bridge_live.py (real, opt-in)
-ui/           server.py + static/dashboard.html (single-unit live HMI + Three.js, selector)
-              plant_server.py + static/plant.html (whole connected-plant view, fake PLCs)
+plc/          bpcs.st (setpoint-control template), sis.st (trip template), load_scenario.py
+              (per-scenario single-unit + generated 3-instance plant programs),
+              docker-compose (OpenPLC v3)   + tests/test_plc_{programs,plant_program}.py
+bridge/       scenario-agnostic Modbus bridge loop; fake + real PLC clients (ModbusUnitView
+              projects each unit's offset block); single-unit + connected-plant bridges; demos
+              + tests/test_{bridge,plant}.py (fake) / test_{bridge,plant}_live.py (real, opt-in)
+ui/           plant_server.py + static/plant.html — the whole connected-plant view (live
+              OpenPLC via --live, or fake PLCs); one BPCS + one SIS carry all three units
 attack/       attack.py — external Modbus attacker: force BPCS setpoint + SIS_OVERRIDE
 ```
 
