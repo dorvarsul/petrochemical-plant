@@ -36,6 +36,18 @@ per-scenario truth). Still Modbus-only; OpenModelica/validated physics deferred.
 - Reactor runaway → cooling-jacket trip (2 coupled ODEs: temp+conc., Arrhenius)
 Pick/run a scenario with the `tank|vessel|reactor` arg or `PETROTWIN_SCENARIO`.
 
+## Baseline control + external setpoint attack
+- The BPCS runs a proportional loop holding the PV at a **writable setpoint**
+  (`BPCS_SETPOINT`, %MW1): `feed_cmd = clamp(bias + kp·(SP−PV), 0, 1000)`, kp signed
+  (negative for the reactor — its actuator is the coolant valve). With no attacker
+  the baseline holds setpoint forever and the SIS never trips.
+- The attack is external (`attack/attack.py`, Modbus): force an off-scale
+  `BPCS_SETPOINT` (drives the process) **and** set `SIS_OVERRIDE` (defeat the trip +
+  freeze the HMI). Setpoint-only is caught by the healthy SIS (defense-in-depth).
+- Control gains live in `common/scenarios.py` and are substituted into `bpcs.st` by
+  `plc/load_scenario.py` (same pattern as the SIS `trip_hh`). The reactor physics is
+  coolant-controlled (fixed reactant throughput) and time-dilated for legibility.
+
 ## Repo conventions
 - Docs in repo root: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / this file.
 - One authoritative Modbus register map (ARCHITECTURE.md); no scattered addresses.

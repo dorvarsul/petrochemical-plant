@@ -1,13 +1,16 @@
 """Vessel-overpressure process model (single ODE, pressure).
 
 One pressurized vessel as a single lump with one state variable: gauge pressure
-``P`` (bar). A compressor feeds it (BPCS actuator, held open in Phase 0); a
-constant process draw bleeds it; a relief valve is the protective device.
+``P`` (bar). A compressor feeds it (the BPCS actuator, modulated by the control
+loop to hold setpoint); a constant process draw bleeds it; a relief valve is the
+protective device.
 
     dP/dt = k_in * feed - k_out - k_relief * trip        (bar/s)
 
-  * ``feed`` ∈ [0,1] is the compressor feed the BPCS commands. Held open, the
-    net term ``k_in - k_out`` is positive, so pressure climbs toward rupture.
+  * ``feed`` ∈ [0,1] is the compressor feed the BPCS commands. At the baseline the
+    control loop trims it so ``k_in*feed == k_out`` (steady at setpoint); the
+    attack's off-scale setpoint drives it wide open, so ``k_in - k_out`` is
+    positive and the pressure climbs toward rupture.
   * ``trip`` is the SIS high-pressure interlock. When healthy it opens the relief
     valve (``k_relief`` large enough to overpower the feed), so pressure falls
     and the vessel stays safe. The attack suppresses ``trip`` — the relief never

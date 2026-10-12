@@ -11,13 +11,16 @@ ODE physics (no OpenModelica — that is still a later phase):
 All three share ONE control/attack topology, which is why they can be
 parameterized rather than forked:
 
-  * a measured process variable (PV) that RISES toward danger,
-  * a BPCS actuator the control PLC drives (in Phase 0, held wide open) which
-    pushes the PV up,
+  * a measured process variable (PV) that rises toward danger,
+  * a BPCS actuator the control PLC modulates with a proportional law to hold
+    the PV at its writable SETPOINT (feed valve / compressor / coolant valve),
   * an SIS high-high trip that, when healthy, forces a protective action and
     holds the PV safe,
-  * the attack: SIS_OVERRIDE suppresses the trip and freezes the operator's PV
-    display while the true PV runs past the failure threshold.
+  * the attack (external, over Modbus): the attacker writes a malicious
+    SETPOINT so the BPCS drives the process toward failure, AND sets
+    SIS_OVERRIDE so the trip is suppressed and the operator's PV display
+    freezes. With no attacker the BPCS simply holds setpoint — the baseline
+    runs forever and never trips.
 
 Everything that differs per scenario lives HERE: PV meaning/units, the integer
 Modbus scaling, the BPCS/SIS setpoints, the failure threshold, the physics
@@ -63,6 +66,17 @@ class Scenario:
     trip_hh: float       # SIS high-high trip threshold (process units)
     fail_at: float       # failure threshold == gauge full scale (process units)
 
+    # --- BPCS control law (integer, register units) --------------------------
+    # The Control PLC runs one proportional law for every scenario:
+    #     feed_cmd[per-mille] = clamp(bias_pm + kp_num*(SP - PV)/kp_den, 0, 1000)
+    # where SP and PV are register-unit integers and feed_cmd is the actuator
+    # position. ``kp_num`` is SIGNED: positive where opening the actuator raises
+    # the PV (tank feed valve, vessel compressor), negative for the reactor,
+    # whose actuator is the COOLANT valve — opening it lowers the temperature, so
+    # the controller opens it when the PV is ABOVE setpoint. The attacker drives
+    # the process by writing a malicious SP (``attack_setpoint_reg``): it
+    # saturates feed_cmd toward failure (valves wide open / coolant shut).
+
     # --- human-readable wording (HMI / 3D / docs) ---
     actuator: str        # BPCS actuator, e.g. "feed valve"
     trip_action: str     # SIS protective action, e.g. "force feed shut"
@@ -72,7 +86,32 @@ class Scenario:
     # --- physics coefficients (consumed by the matching physics model) ---
     physics: Mapping[str, float] = field(default_factory=dict)
 
+    # --- BPCS control-law constants (see block above; register units) ---
+    ctrl_bias_pm: int = 0    # feed_cmd at zero error (per-mille)
+    ctrl_kp_num: int = 0     # proportional-gain numerator (signed)
+    ctrl_kp_den: int = 1     # proportional-gain denominator (> 0)
+
     # --- derived ---
+    @property
+    def setpoint_reg(self) -> int:
+        """BPCS normal operating setpoint as an integer register value.
+
+        Written into the BPCS ``SETPOINT`` memory word at startup/reset as the
+        operator's safe target. The attacker overwrites it with
+        ``attack_setpoint_reg`` over Modbus — that is the whole attack driver.
+        """
+        return int(round(self.setpoint * self.reg_scale))
+
+    @property
+    def attack_setpoint_reg(self) -> int:
+        """The malicious operating setpoint an external attacker writes to the
+        BPCS: twice the gauge full scale — an off-scale-high demand (e.g. 20 m
+        in a 10 m tank). It keeps the control actuator saturated (feed valves
+        wide open / the coolant valve shut) all the way PAST failure, instead of
+        the loop easing off as the PV nears an in-range target. Kept well within
+        a signed 16-bit register."""
+        return min(2 * self.reg_full_scale, 32000)
+
     @property
     def pv_full_scale(self) -> float:
         """Top of the PV range == the failure threshold (gauge/3D brim)."""
@@ -133,7 +172,11 @@ SCENARIOS: dict[str, Scenario] = {
         trip_action="force feed shut",
         failure_word="OVERFLOW",
         rising_blurb="feed open, level rising toward the brim",
-        physics=dict(area=1.0, q_in_max=0.05, q_out=0.0),
+        # A steady downstream draw (q_out) the feed valve must replace, so the
+        # BPCS level loop has a real operating point (feed ≈ 40% holds 5 m).
+        physics=dict(area=1.0, q_in_max=0.05, q_out=0.02),
+        # feed = 0.40 + 0.60*(SP-L)[m]; holds 5 m, feed→100% when SP driven high.
+        ctrl_bias_pm=400, ctrl_kp_num=3, ctrl_kp_den=5,
     ),
     "vessel": Scenario(
         id="vessel",
@@ -154,6 +197,8 @@ SCENARIOS: dict[str, Scenario] = {
         rising_blurb="compressor feeding, pressure climbing toward rupture",
         # dP/dt = k_in*feed - k_out - k_relief*trip   (bar/s)
         physics=dict(k_in=0.10, k_out=0.02, k_relief=0.30),
+        # feed = 0.20 + 0.30*(SP-P)[bar]; holds 5 bar, feed→100% when SP high.
+        ctrl_bias_pm=200, ctrl_kp_num=3, ctrl_kp_den=1,
     ),
     "reactor": Scenario(
         id="reactor",
@@ -168,25 +213,32 @@ SCENARIOS: dict[str, Scenario] = {
         setpoint=80.0,
         trip_hh=110.0,
         fail_at=300.0,
-        actuator="reactant feed",
-        trip_action="force max cooling",
+        actuator="coolant valve",
+        trip_action="emergency max cooling",
         failure_word="RUNAWAY",
         rising_blurb="exothermic reaction self-heating toward runaway",
-        # CSTR with Arrhenius self-heating; cooling jacket base vs. tripped-max.
-        #   k(T) = k0*exp(-E/(T+273.15))
-        #   r    = k(T)*C
-        #   dC/dt = q*(C_in - C) - r      (q = feed*F_over_V)
+        # CSTR with Arrhenius self-heating. Reactant throughput is FIXED; the
+        # BPCS temperature loop modulates the COOLANT VALVE (feed_cmd = valve
+        # fraction u) to hold 80 °C. This is the one scenario whose actuator
+        # REMOVES energy, so its control gain is negative (open the coolant
+        # valve when too hot).
+        #   k(T)  = k0*exp(-E/(T+273.15));   r = k(T)*C
+        #   dC/dt = q*(C_in - C) - r         (q fixed)
         #   dT/dt = beta*r - cool*(T - Tc)
-        #   cool  = cool_max if trip else cool_base
-        # Coefficients tuned (see repo history) for a legible runaway: a slow
-        # accelerating induction (80->~97 °C over ~135 s) then the excursion to
-        # 300 °C by ~158 s with base cooling; the SIS trip at 110 °C quenches it
-        # to a safe peak ~110 °C, and max cooling from the start holds it at 80.
+        #   cool  = cool_trip (SIS emergency) else cool_min + u*(cool_ctrl-cool_min)
+        # Tuned for a robust baseline (u≈50% coolant holds 80 °C) and a legible
+        # attack: a malicious high setpoint shuts the coolant valve (u→0,
+        # cool→cool_min), giving a slow induction then an excursion to 300 °C by
+        # ~150 s; the SIS trip at 110 °C forces cool_trip and quenches it safely.
+        # Time-dilated ×0.35 vs. the bench kinetics for watch-ability (shape and
+        # steady states preserved — k0/cooling/q scale together).
         physics=dict(
-            k0=66500.0, E=6000.0, beta=500.0,
-            F_over_V=0.0042, C_in=1.0, C0=0.6,
-            cool_base=0.0149, cool_max=0.28, Tc=25.0,
+            k0=23275.0, E=6000.0, beta=500.0,
+            q=0.00147, C_in=1.0, C0=0.6,
+            cool_min=0.0035, cool_ctrl=0.007105, cool_trip=0.098, Tc=25.0,
         ),
+        # u = 0.50 - 0.04*(SP-T)[°C]; holds 80 °C at ~50% coolant, u→0% when SP high.
+        ctrl_bias_pm=500, ctrl_kp_num=-4, ctrl_kp_den=1,
     ),
 }
 

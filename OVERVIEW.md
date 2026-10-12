@@ -57,9 +57,14 @@ same data path an attacker controls.
 
 A live run looks like this:
 
-1. **Normal operation** — process steady, Safety PLC armed, HMI green, 3D stable.
-2. **Attack injected** — the Safety PLC's trip/interlock is overridden, and the data
-   it feeds the HMI is held at nominal.
+1. **Baseline operation** — the Control PLC holds the process at its setpoint, the
+   Safety PLC is armed, HMI green, 3D stable. With no attacker this runs forever and
+   never trips.
+2. **Attack injected (external, over Modbus)** — the attacker writes a malicious
+   setpoint to the **Control PLC** so its loop drives the process toward failure,
+   **and** overrides the **Safety PLC**'s trip/interlock (which also freezes the data
+   it feeds the HMI at nominal). The setpoint manipulation alone would be caught by
+   the healthy SIS; defeating the SIS is what lets it reach failure.
 3. **Divergence** — the HMI **stays green** (spoofed/frozen) while the **3D view
    shows the process running away to failure**.
 
@@ -91,9 +96,10 @@ PetroTwin reproduces the Triton **attack pattern**, not the Triton **mechanism**
 - OpenPLC is a **generic Modbus soft-PLC**. It cannot faithfully emulate a Triconex
   controller or the TriStation protocol.
 
-So PetroTwin demonstrates the *shape* of the attack — compromise the SIS, defeat the
-interlock, spoof the operator's view, let the process fail — using Modbus register
-writes rather than a Triconex-specific exploit. Mechanism-level fidelity (emulating a
+So PetroTwin demonstrates the *shape* of the attack — manipulate the control
+setpoint, compromise the SIS, defeat the interlock, spoof the operator's view, let
+the process fail — using Modbus register writes rather than a Triconex-specific
+exploit. Mechanism-level fidelity (emulating a
 TriStation-like safety protocol) is an **explicit later-phase decision**, not an
 assumed goal. Real or virtualized Triconex hardware plus original malware analysis is
 out of scope entirely and would be a separate, funded project.

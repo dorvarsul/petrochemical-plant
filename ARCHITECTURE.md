@@ -19,14 +19,17 @@ The PLC layer is deliberately **two separate OpenPLC instances**, mirroring the
 real-world separation of basic process control from safety:
 
 - **Control PLC — BPCS (Basic Process Control System)**
-  Runs the process normally: reads sensors, drives actuators (pump, feed valve,
-  cooling), keeps the process at setpoint. Not the attack target.
+  Runs the process normally: reads the sensor, drives the actuator (feed valve,
+  compressor, coolant valve) with a proportional loop that holds the PV at a
+  writable setpoint. **The attack manipulates that setpoint** to drive the process —
+  but the BPCS is not a safety function, so this alone is caught by the SIS.
 
 - **Safety PLC — SIS (Safety Instrumented System)**
   Independent of the BPCS. Holds the **trip/interlock** logic: when a measured
   variable crosses a safe limit, it commands the protective action (open relief,
-  close feed, open cooling) regardless of what the BPCS wants.
-  **This is what the attack compromises.**
+  close feed, emergency cooling) regardless of what the BPCS wants.
+  **The attack must also override this** to reach failure, and the override freezes
+  the operator's HMI.
 
 Keeping them separate is what makes the demonstration meaningful: defeating the SIS
 is a distinct, targeted act, not a side effect of controlling the plant.
@@ -66,18 +69,25 @@ individual layer. See `ROADMAP.md`.
 
 ## Where the attack injects
 
-The attack is a script that acts on the **Safety PLC (SIS)** over Modbus:
+The attack is an external script (`attack/attack.py`) that reaches the plant only
+over Modbus and acts on **both PLCs**:
 
-1. **Override the trip/interlock** — force the SIS trip output to its non-tripped
-   state (hold the protective actuator command inactive) so the interlock never
-   fires even as the true process crosses the safe limit.
-2. **Spoof the operator view** — hold the registers the HMI polls at nominal values
-   (freeze/clamp), so the HMI keeps showing a safe, steady process.
+1. **Manipulate the control setpoint (Control PLC — the driver)** — write an
+   off-scale `BPCS_SETPOINT`, so the BPCS control loop drives its actuator to the
+   limit (feed wide open / coolant shut) and pushes the true PV toward failure.
+2. **Override the trip/interlock (Safety PLC)** — force the SIS trip output to its
+   non-tripped state so the interlock never fires even as the true PV crosses the
+   safe limit. (Without this, step 1 alone is caught by the healthy SIS.)
+3. **Spoof the operator view (Safety PLC)** — the override also freezes the register
+   the HMI polls (`SIS_PV_HMI`) at its last nominal value, so the HMI keeps showing a
+   safe, steady process.
 
 The physics model keeps integrating the *true* state the whole time, so the 3D view
-diverges from the HMI and runs to failure. In Phase 0 this is done with **Modbus
-register writes only** — it reproduces the attack *pattern* (defeat the SIS, blind
-the operator), not the Triton *mechanism* (TriStation/Triconex firmware injection).
+diverges from the HMI and runs to failure. With no attacker, the baseline control
+loop holds setpoint indefinitely. In Phase 0 this is done with **Modbus register
+writes only** — it reproduces the attack *pattern* (manipulate the setpoint, defeat
+the SIS, blind the operator), not the Triton *mechanism* (TriStation/Triconex
+firmware injection).
 
 ## Data-flow diagram
 
@@ -100,14 +110,12 @@ the operator), not the Triton *mechanism* (TriStation/Triconex firmware injectio
                                        │ CONTROL PLC │      │  SAFETY PLC     │
                                        │   (BPCS)    │      │   (SIS)         │
                                        │  OpenPLC    │      │  OpenPLC        │
-                                       │ control     │      │ trip/interlock  │
-                                       │ logic       │      │ logic           │
+                                       │ setpoint    │      │ trip/interlock  │
+                                       │ control     │      │ logic           │
                                        └──────┬──────┘      └────────┬────────┘
-                                              │                      │
-                                              │              ▲ ATTACK INJECTS HERE
-                                              │              │ (Modbus writes:
-                                              │              │  override trip +
-                                              │              │  freeze HMI regs)
+                                         ▲ ATTACK ①            ▲ ATTACK ②③
+                                         │ force setpoint      │ override trip +
+                                         │ (drive actuator)    │ freeze HMI regs
                                               │ Modbus poll   │ Modbus poll
                                               └───────┬───────┘
                                                       ▼
@@ -163,34 +171,50 @@ The map encodes one control/attack story, parameterized per scenario — a
 scenarios differ only in the PV, its scaling, the trip threshold, and the
 physical meaning of the protective action:
 
-| Scenario | PV (`reg_scale`) | BPCS actuator | SIS trip (`trip_hh`) | Protective action | Failure |
-|----------|------------------|---------------|----------------------|-------------------|---------|
-| tank    | level, m (`×1000`)    | feed valve       | 9.0 m (`9000`)   | force feed shut  | overflow at 10 m |
-| vessel  | pressure, bar (`×100`)| compressor feed  | 16.0 bar (`1600`)| open relief valve| rupture at 20 bar |
-| reactor | temperature, °C (`×10`)| reactant feed   | 110 °C (`1100`)  | force max cooling| runaway at 300 °C |
+| Scenario | PV (`reg_scale`) | BPCS actuator (control gain) | SIS trip (`trip_hh`) | Protective action | Failure |
+|----------|------------------|------------------------------|----------------------|-------------------|---------|
+| tank    | level, m (`×1000`)    | feed valve (+)       | 9.0 m (`9000`)   | force feed shut  | overflow at 10 m |
+| vessel  | pressure, bar (`×100`)| compressor feed (+)  | 16.0 bar (`1600`)| open relief valve| rupture at 20 bar |
+| reactor | temperature, °C (`×10`)| coolant valve (−)   | 110 °C (`1100`)  | emergency max cooling| runaway at 300 °C |
 
-- **Normal:** the process is running. The BPCS holds the feed actuator open; the
-  SIS high-high trip is armed, watching the true PV. The operator HMI shows the PV
-  and an "SIS armed" status **sourced from the Safety PLC** — so a single SIS
-  compromise both defeats protection and blinds the operator. (Concentrating the
-  HMI's safety display on the SIS is a simplification; distributed display sourcing
-  is a later-phase topic.)
+- **Baseline (no attacker):** the BPCS runs a proportional loop that holds the PV at
+  its writable `BPCS_SETPOINT`, modulating the actuator —
+  `feed_cmd = clamp(bias + kp·(SP − PV), 0, 1000)`. The gain `kp` is **signed**:
+  positive where opening the actuator raises the PV (tank/vessel), negative for the
+  reactor, whose coolant valve lowers it. The process simply sits at setpoint
+  forever, and the SIS high-high trip (armed, watching the true PV) never fires. The
+  operator HMI shows the PV and "SIS armed" status **sourced from the Safety PLC** —
+  so a single SIS compromise both defeats protection and blinds the operator.
+  (Concentrating the HMI's safety display on the SIS is a simplification.)
 - **Protective action:** at PV ≥ `trip_hh`, the healthy SIS latches `SIS_TRIP_CMD`;
   the physics model applies it in its scenario-specific way and holds the process
   safe.
-- **Attack (Safety PLC only):** the attacker sets `SIS_OVERRIDE`, after which the
-  SIS logic holds `SIS_TRIP_CMD` and `SIS_TRIP_STATUS` deasserted (no trip,
-  indicator "armed") and **stops refreshing** `SIS_PV_HMI`, so the operator's PV
-  freezes at its last nominal value while the true PV keeps rising. The physics
-  runs to failure while the HMI stays green. This abuses a force/override path
-  reachable over Modbus — the attack **pattern**, not Triton's program-injection
-  **mechanism** (Phase 3). See `OVERVIEW.md` scope limit.
-- **How the trip reaches the physics:** the bridge reads `SIS_TRIP_CMD` and
+- **Attack (external, over Modbus — two writes):**
+  1. **Control-setpoint manipulation (the driver):** the attacker writes an
+     off-scale `BPCS_SETPOINT` to the Control PLC, so the BPCS control loop drives
+     its actuator to the limit (feed valves wide open / the coolant valve shut),
+     pushing the true PV toward failure. Alone, this is caught by a healthy SIS,
+     which trips and holds the process safe (a defense-in-depth contrast).
+  2. **Safety defeat + HMI spoof:** the attacker sets `SIS_OVERRIDE`, so the SIS
+     holds `SIS_TRIP_CMD`/`SIS_TRIP_STATUS` deasserted and **stops refreshing**
+     `SIS_PV_HMI` — the operator's PV freezes at its last nominal value while the
+     true PV runs to failure. (The attacker does **not** spoof `BPCS_SETPOINT`
+     itself, so a vigilant operator could notice the changed setpoint — one real
+     tell against an otherwise green HMI.)
+
+  This abuses a writable control setpoint plus a force/override path, both reachable
+  over Modbus — the attack **pattern** (manipulate the setpoint, defeat the safety
+  layer, blind the operator), not Triton's program-injection **mechanism** (Phase 3).
+  See `OVERVIEW.md` scope limit. `attack/attack.py` is the standalone attacker;
+  `--reset` stands it down.
+- **How the commands reach the physics:** the bridge reads `SIS_TRIP_CMD` and
   `BPCS_FEED_CMD` and calls `model.step(dt, feed_cmd, trip)`; each model applies the
-  trip itself (feed shut / relief open / max cooling). `trip_hh` is a program
-  constant engineered per scenario — its single source is `scenario.trip_reg`, which
-  `plc/load_scenario.py` substitutes into the SIS program at load time (a writable
-  setpoint register is a later-phase option and a second attack variant).
+  actuator and the trip itself (tank: feed valve / feed shut; vessel: compressor /
+  relief; reactor: coolant valve / emergency cooling). `trip_hh` and the control
+  gains are program constants whose single source is `common/scenarios.py`, which
+  `plc/load_scenario.py` substitutes into the SIS and BPCS programs at load time. The
+  `BPCS_SETPOINT` register is seeded with the safe setpoint at startup/reset and
+  never rewritten by the bridge, so an attacker's setpoint persists until reset.
 
 ### Register map (all scenarios)
 
@@ -204,7 +228,8 @@ scenario — only the PV scaling (see the table above) changes. **The PV sensor 
 | Table | Addr | ST var | Name            | Direction                  | Units / scale        | Meaning                                         |
 |-------|------|--------|-----------------|----------------------------|----------------------|-------------------------------------------------|
 | hold  | `1024`| `%MW0`| `BPCS_PV`       | physics → PLC (master wr.) | scaled PV            | true PV measured by BPCS; program reads it      |
-| hold  | `1`  | `%QW1` | `BPCS_FEED_CMD` | PLC → physics (master rd.) | per-mille (`0–1000`) | feed-actuator position; program holds `1000` (open) |
+| hold  | `1025`| `%MW1`| `BPCS_SETPOINT` | operator/**attack** → PLC (master wr.) | scaled PV | control setpoint; program reads it. Seeded safe at startup/reset; **attack writes off-scale.** A `%MW` word so a master write reaches the program. |
+| hold  | `1`  | `%QW1` | `BPCS_FEED_CMD` | PLC → physics (master rd.) | per-mille (`0–1000`) | actuator position from the control loop `clamp(bias + kp·(SP−PV))` |
 
 **Safety PLC — SIS** · Modbus slave, default `localhost:5021`
 

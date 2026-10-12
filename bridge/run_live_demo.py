@@ -52,6 +52,7 @@ def main():
     sis = ModbusPlc.for_instance(R.Instance.SIS)
     model = make_model(sid)
     b = Bridge(model, bpcs, sis, dt=DT)
+    b.prime_setpoint()  # seed the operator's safe setpoint before the run
 
     # Warm up a few cycles so the SIS has mirrored the PV to the HMI, then
     # restart the process clock so the printed run starts clean.
@@ -62,8 +63,9 @@ def main():
 
     print(f"PetroTwin LIVE divergence demo — {sc.title} [{sc.unit_tag}] "
           "(real OpenPLC over Modbus)")
-    print(f"SIS trip at {sc.trip_hh} {sc.pv_units}; "
-          f"attack (SIS_OVERRIDE) injected at t={ATTACK_AT:.0f} s\n")
+    print(f"BPCS holds setpoint {sc.setpoint} {sc.pv_units}; SIS trip at "
+          f"{sc.trip_hh} {sc.pv_units}; attack (malicious setpoint + "
+          f"SIS_OVERRIDE) injected at t={ATTACK_AT:.0f} s\n")
 
     attacked = False
     frozen = None
@@ -72,10 +74,14 @@ def main():
     try:
         for _ in range(400):
             if not attacked and b.model.time >= ATTACK_AT:
-                b.sis.write_coil(R.SisCoil.OVERRIDE, True)  # the attack, over Modbus
+                # The attack, over Modbus: malicious setpoint + safety defeat.
+                b.bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
+                b.sis.write_coil(R.SisCoil.OVERRIDE, True)
                 attacked = True
                 frozen = b.hmi_pv()
-                print(f">>> ATTACK: SIS_OVERRIDE set — HMI frozen at "
+                atk_sp = sc.reg_to_pv(sc.attack_setpoint_reg)
+                print(f">>> ATTACK: BPCS setpoint forced to {atk_sp:g} "
+                      f"{sc.pv_units} + SIS_OVERRIDE set — HMI frozen at "
                       f"{frozen:.3f} {sc.pv_units}\n")
             s = b.step()
             time.sleep(SETTLE)

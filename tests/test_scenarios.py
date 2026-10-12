@@ -77,5 +77,40 @@ class TestInvariants(unittest.TestCase):
             self.assertEqual(sc.trip_reg, round(sc.trip_hh * sc.reg_scale))
 
 
+class TestControlLaw(unittest.TestCase):
+    def test_setpoint_reg_matches_scaling(self):
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertEqual(sc.setpoint_reg, round(sc.setpoint * sc.reg_scale))
+
+    def test_attack_setpoint_is_off_scale_but_fits_register(self):
+        # The malicious setpoint sits ABOVE full scale so the actuator stays
+        # saturated past failure, and still fits a signed 16-bit register.
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertGreater(sc.attack_setpoint_reg, sc.reg_full_scale, sid)
+            self.assertLessEqual(sc.attack_setpoint_reg, 32767, sid)
+
+    def test_control_gain_well_formed_and_signed(self):
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertGreater(sc.ctrl_kp_den, 0, sid)
+            self.assertNotEqual(sc.ctrl_kp_num, 0, sid)
+            self.assertTrue(0 <= sc.ctrl_bias_pm <= 1000, sid)
+        # The reactor's coolant valve removes energy -> negative gain; the others
+        # add to the PV -> positive gain.
+        self.assertLess(scenarios.get("reactor").ctrl_kp_num, 0)
+        self.assertGreater(scenarios.get("tank").ctrl_kp_num, 0)
+        self.assertGreater(scenarios.get("vessel").ctrl_kp_num, 0)
+
+    def test_bias_holds_setpoint_at_zero_error(self):
+        # At PV == setpoint the control term is zero, so feed_cmd == bias: that
+        # is the nominal baseline actuator position (not saturated).
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            self.assertLess(sc.ctrl_bias_pm, 1000, sid)
+            self.assertGreater(sc.ctrl_bias_pm, 0, sid)
+
+
 if __name__ == "__main__":
     unittest.main()

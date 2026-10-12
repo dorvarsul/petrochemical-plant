@@ -39,11 +39,30 @@ class PlcClient(Protocol):
 # --------------------------------------------------------------------------
 # Fake PLCs (mirror the ST programs)
 # --------------------------------------------------------------------------
-class FakeBpcs:
-    """In-memory Control PLC — mirrors plc/bpcs/bpcs.st (run the process)."""
+def _idiv(a: int, b: int) -> int:
+    """Integer division truncated toward zero, matching IEC-61131-3 / the ST
+    program (Python's // truncates toward -inf, which would disagree by 1 LSB
+    for a negative control term)."""
+    return int(a / b)
 
-    def __init__(self) -> None:
+
+class FakeBpcs:
+    """In-memory Control PLC — mirrors plc/bpcs/bpcs.st (setpoint control).
+
+    Runs the same proportional law as the ST program, using the scenario's
+    control constants (``ctrl_bias_pm`` / ``ctrl_kp_num`` / ``ctrl_kp_den``),
+    the same single source of truth the loader substitutes into the real PLC:
+
+        feed_cmd = clamp(bias_pm + kp_num*(SP - PV)//kp_den, 0, 1000)
+
+    The SETPOINT register is master-writable (the bridge seeds the safe value;
+    the attack overwrites it), exactly like the real %MW1 word.
+    """
+
+    def __init__(self, scenario) -> None:
+        self.scenario = scenario
         self._holding = {int(R.BpcsHolding.PV): 0,
+                         int(R.BpcsHolding.SETPOINT): 0,
                          int(R.BpcsHolding.FEED_CMD): 0}
 
     def read_coil(self, addr: int) -> bool:
@@ -59,8 +78,12 @@ class FakeBpcs:
         self._holding[int(addr)] = int(value)
 
     def scan(self) -> None:
-        # bpcs.st: feed_cmd := 1000  (valve fully open)
-        self._holding[int(R.BpcsHolding.FEED_CMD)] = R.VALVE_REG_MAX
+        sc = self.scenario
+        pv = self._holding[int(R.BpcsHolding.PV)]
+        sp = self._holding[int(R.BpcsHolding.SETPOINT)]
+        raw = sc.ctrl_bias_pm + _idiv(sc.ctrl_kp_num * (sp - pv), sc.ctrl_kp_den)
+        raw = 0 if raw < 0 else R.VALVE_REG_MAX if raw > R.VALVE_REG_MAX else raw
+        self._holding[int(R.BpcsHolding.FEED_CMD)] = raw
 
     def close(self) -> None:
         pass

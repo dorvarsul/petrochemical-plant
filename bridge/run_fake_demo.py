@@ -44,10 +44,12 @@ def main() -> None:
     sid = _pick_scenario(sys.argv)
     sc = scenarios.get(sid)
     model = make_model(sid)
-    b = Bridge(model, FakeBpcs(), FakeSis(sc.trip_reg), dt=DT)
+    b = Bridge(model, FakeBpcs(sc), FakeSis(sc.trip_reg), dt=DT)
+    b.prime_setpoint()  # operator's safe setpoint; baseline holds here until the attack
 
     print(f"PetroTwin divergence demo (fake PLCs) — {sc.title} [{sc.unit_tag}]")
-    print(f"PV = {sc.pv_name} ({sc.pv_units}); SIS trip at {sc.trip_hh} {sc.pv_units}; "
+    print(f"PV = {sc.pv_name} ({sc.pv_units}); BPCS holds setpoint {sc.setpoint} "
+          f"{sc.pv_units}; SIS trip at {sc.trip_hh} {sc.pv_units}; "
           f"{sc.failure_word} at {sc.fail_at} {sc.pv_units}; "
           f"attack at t={ATTACK_AT:.0f} s\n")
 
@@ -57,10 +59,15 @@ def main() -> None:
     s = None
     for _ in range(40000):
         if not attacked and b.model.time >= ATTACK_AT:
-            b.sis.write_coil(R.SisCoil.OVERRIDE, True)  # <-- the attack
+            # The external attack, over Modbus: manipulate the control setpoint
+            # AND defeat the safety layer.
+            b.bpcs.write_holding(R.BpcsHolding.SETPOINT, sc.attack_setpoint_reg)
+            b.sis.write_coil(R.SisCoil.OVERRIDE, True)
             attacked = True
             frozen_hmi = b.hmi_pv()
-            print(f">>> ATTACK: SIS_OVERRIDE set — HMI now frozen at "
+            atk_sp = sc.reg_to_pv(sc.attack_setpoint_reg)
+            print(f">>> ATTACK: BPCS setpoint forced to {atk_sp:g} {sc.pv_units} "
+                  f"(safe {sc.setpoint:g}) + SIS_OVERRIDE set — HMI now frozen at "
                   f"{frozen_hmi:.3f} {sc.pv_units}, trip suppressed\n")
 
         s = b.step()

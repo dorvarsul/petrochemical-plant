@@ -34,9 +34,12 @@ Tested per OpenPLC instance against its IEC 61131-3 logic.
   / cooling).
 - **Hysteresis / latch.** Once tripped, the SIS stays tripped (or follows the defined
   reset rule) rather than chattering around the limit.
-- **Control PLC (BPCS) — setpoint behaviour.** Control logic drives the actuator to
-  hold setpoint under normal inputs; it does **not** perform the safety trip (that is
-  the SIS's job) — confirming the two-PLC separation.
+- **Control PLC (BPCS) — setpoint behaviour.** The proportional control loop drives
+  the actuator to hold the PV at its writable setpoint under normal inputs (and the
+  signed gain means the reactor's coolant valve opens as it heats); it does **not**
+  perform the safety trip (that is the SIS's job) — confirming the two-PLC
+  separation. A malicious setpoint saturates the actuator toward failure, which the
+  bridge tests exercise both with the SIS armed (caught) and defeated (fails).
 
 Pass = trip asserts exactly at threshold with correct actuator; BPCS holds setpoint
 and does not substitute for the SIS.
@@ -81,10 +84,13 @@ A–G criteria below. `bridge.run_fake_demo <scenario>` and `bridge.run_live_dem
 <scenario>` print the acceptance verdict; the parameterized bridge tests assert it.
 
 **Sequence**
-1. **Normal.** Start physics, both PLCs, bridge, HMI, 3D view. Process steady; SIS
-   armed; HMI nominal (green); 3D stable. 3D value tracks HMI value.
-2. **Attack.** Run the attack script: override the SIS trip and freeze the HMI-polled
-   registers.
+1. **Baseline.** Start physics, both PLCs, bridge, HMI, 3D view. The BPCS holds the
+   process at its setpoint; SIS armed; HMI nominal (green); 3D stable. 3D value
+   tracks HMI value, and with no attacker it stays there indefinitely (never trips).
+2. **Attack.** Run the external attack script: write a malicious `BPCS_SETPOINT`
+   (drives the process) and set `SIS_OVERRIDE` (suppress the trip + freeze the
+   HMI-polled registers). (Setpoint-only, with the SIS left armed, is also tested and
+   must be caught by the healthy SIS.)
 3. **Divergence.** Physics continues integrating true state. The protective action
    never fires. The true variable crosses the **failure threshold**; the 3D view shows
    the process going to failure (rupture/overflow/runaway) — while the HMI **stays

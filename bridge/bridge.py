@@ -36,6 +36,8 @@ class BridgeSample:
     trip_cmd: bool          # SIS trip asserted this cycle
     hmi_pv: float           # PV as shown on the operator HMI (SIS-reported)
     hmi_trip_status: bool   # operator indicator: True = tripped, False = armed
+    setpoint: float         # BPCS control setpoint (process units) — the attack surface
+    override: bool          # SIS_OVERRIDE coil — True once the SIS is compromised
 
     @property
     def divergence(self) -> float:
@@ -52,8 +54,20 @@ class Bridge:
         self.sis = sis
         self.dt = dt
 
+    def prime_setpoint(self, setpoint_reg: int | None = None) -> None:
+        """Seed the BPCS control setpoint (the operator's safe target).
+
+        Called once at startup/reset — NOT every cycle — so that a malicious
+        setpoint later written over Modbus persists until the next reset (that
+        persistence is what makes the external setpoint attack real). Defaults
+        to the scenario's safe setpoint.
+        """
+        if setpoint_reg is None:
+            setpoint_reg = self.scenario.setpoint_reg
+        self.bpcs.write_holding(R.BpcsHolding.SETPOINT, int(setpoint_reg))
+
     def step(self) -> BridgeSample:
-        # 1. publish true PV to both PLCs (sensor injection into %QW0)
+        # 1. publish true PV to both PLCs (sensor injection into %MW0)
         pv_reg = self.scenario.pv_to_reg(self.model.pv)
         self.bpcs.write_holding(R.BpcsHolding.PV, pv_reg)
         self.sis.write_holding(R.SisHolding.PV, pv_reg)
@@ -76,6 +90,9 @@ class Bridge:
             trip_cmd=trip,
             hmi_pv=self.hmi_pv(),
             hmi_trip_status=self.hmi_trip_status(),
+            setpoint=self.scenario.reg_to_pv(
+                self.bpcs.read_holding(R.BpcsHolding.SETPOINT)),
+            override=self.sis.read_coil(R.SisCoil.OVERRIDE),
         )
 
     # --- Operator-facing (HMI) reads, off the SIS registers ---

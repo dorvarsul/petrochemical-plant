@@ -31,6 +31,12 @@ mirror). The SENSOR injection (master→program) therefore uses a `%MW` MEMORY
 word (`MW_HOLDING_BASE + k`), which the master and the program share in place
 with no scan clobber. Coils are shared too, so the override coil works
 master→program. This replaces the earlier (incorrect) `%QW0`-sensor mapping.
+
+The BPCS `SETPOINT` register (`%MW1` = holding 1025) is master→program for the
+same reason: the operator (and, in the attack, the external attacker) writes the
+control setpoint, and the BPCS program only reads it. The bridge seeds it with
+the safe setpoint at startup/reset and never rewrites it afterwards, so a
+malicious setpoint written over Modbus persists until the next reset.
 """
 
 from __future__ import annotations
@@ -63,8 +69,9 @@ ENDPOINTS = {
 # --- BPCS (Control PLC) registers ------------------------------------------
 class BpcsHolding(IntEnum):
     """BPCS holding registers (master read/write)."""
-    PV = MW_HOLDING_BASE  # %MW0 (holding 1024) physics -> PLC sensor; program reads
-    FEED_CMD = 1          # %QW1 PLC -> physics (per-mille); program writes
+    PV = MW_HOLDING_BASE        # %MW0 (holding 1024) physics -> PLC sensor; program reads
+    SETPOINT = MW_HOLDING_BASE + 1  # %MW1 (holding 1025) operator/ATTACK -> PLC; program reads
+    FEED_CMD = 1                # %QW1 PLC -> physics (per-mille); program writes
 
 
 # --- SIS (Safety PLC) registers --------------------------------------------
@@ -94,6 +101,8 @@ class RegInfo:
 REGISTERS = {
     (Instance.BPCS, "holding", BpcsHolding.PV):
         RegInfo(Instance.BPCS, "holding", "%MW0", "physics->PLC", "pv (scaled)"),
+    (Instance.BPCS, "holding", BpcsHolding.SETPOINT):
+        RegInfo(Instance.BPCS, "holding", "%MW1", "attack->PLC", "pv (scaled)"),
     (Instance.BPCS, "holding", BpcsHolding.FEED_CMD):
         RegInfo(Instance.BPCS, "holding", "%QW1", "PLC->physics", "per-mille"),
     (Instance.SIS, "coil", SisCoil.TRIP_CMD):

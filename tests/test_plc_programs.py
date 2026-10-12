@@ -11,24 +11,42 @@ from pathlib import Path
 
 from common import registers as R
 from common import scenarios
-from plc.load_scenario import BPCS_ST, SIS_TEMPLATE, sis_program_for
+from plc.load_scenario import (BPCS_ST, SIS_TEMPLATE, bpcs_program_for,
+                               sis_program_for)
 
 TRIP_RE = re.compile(r"TRIP_HH\s*:\s*INT\s*:=\s*(\d+)\s*;")
+BIAS_RE = re.compile(r"BIAS_PM\s*:\s*DINT\s*:=\s*(-?\d+)\s*;")
+KPNUM_RE = re.compile(r"KP_NUM\s*:\s*DINT\s*:=\s*(-?\d+)\s*;")
+KPDEN_RE = re.compile(r"KP_DEN\s*:\s*DINT\s*:=\s*(-?\d+)\s*;")
 
 
 class TestBpcsProgram(unittest.TestCase):
     def setUp(self):
         self.text = Path(BPCS_ST).read_text()
 
-    def test_drives_feed_fully_open(self):
-        self.assertIn("feed_cmd := 1000", self.text)
+    def test_runs_a_proportional_setpoint_loop(self):
+        # The baseline program is a proportional controller holding PV at the
+        # writable setpoint, not a fixed wide-open valve.
+        self.assertIn("feed_cmd := DINT_TO_INT(raw)", self.text)
+        self.assertRegex(self.text, r"raw\s*:=\s*BIAS_PM\s*\+")
+        self.assertIn("setpoint - pv", self.text)
+        self.assertNotIn("feed_cmd := 1000", self.text)
 
     def test_located_vars_match_register_map(self):
-        # PV sensor is a %MW memory word (holding 1024); feed command is %QW1.
+        # PV sensor and setpoint are %MW memory words; feed command is %QW1.
         self.assertRegex(self.text, r"pv\s+AT %MW0")
+        self.assertRegex(self.text, r"setpoint AT %MW1")
         self.assertRegex(self.text, r"feed_cmd AT %QW1")
         self.assertEqual(int(R.BpcsHolding.PV), R.MW_HOLDING_BASE)
+        self.assertEqual(int(R.BpcsHolding.SETPOINT), R.MW_HOLDING_BASE + 1)
         self.assertEqual(int(R.BpcsHolding.FEED_CMD), 1)
+
+    def test_template_default_is_tank(self):
+        # The committed default compiles standalone and equals the tank gains.
+        tank = scenarios.get("tank")
+        self.assertEqual(int(BIAS_RE.search(self.text).group(1)), tank.ctrl_bias_pm)
+        self.assertEqual(int(KPNUM_RE.search(self.text).group(1)), tank.ctrl_kp_num)
+        self.assertEqual(int(KPDEN_RE.search(self.text).group(1)), tank.ctrl_kp_den)
 
 
 class TestSisTemplate(unittest.TestCase):
@@ -75,6 +93,30 @@ class TestScenarioSubstitution(unittest.TestCase):
                 if a != b]
         self.assertEqual(len(diff), 1)
         self.assertIn("TRIP_HH", diff[0][0])
+
+    def test_each_scenario_gets_its_bpcs_gains(self):
+        for sid in scenarios.ids():
+            sc = scenarios.get(sid)
+            prog = bpcs_program_for(sid)
+            self.assertEqual(int(BIAS_RE.search(prog).group(1)), sc.ctrl_bias_pm, sid)
+            self.assertEqual(int(KPNUM_RE.search(prog).group(1)), sc.ctrl_kp_num, sid)
+            self.assertEqual(int(KPDEN_RE.search(prog).group(1)), sc.ctrl_kp_den, sid)
+
+    def test_reactor_bpcs_gain_is_negative(self):
+        # The reactor's actuator (coolant valve) removes energy, so its control
+        # gain is signed negative — unique among the scenarios.
+        self.assertLess(scenarios.get("reactor").ctrl_kp_num, 0)
+        self.assertGreater(scenarios.get("tank").ctrl_kp_num, 0)
+        self.assertGreater(scenarios.get("vessel").ctrl_kp_num, 0)
+
+    def test_bpcs_substitution_changes_only_the_gain_lines(self):
+        tank = bpcs_program_for("tank").splitlines()
+        reactor = bpcs_program_for("reactor").splitlines()
+        diff = [a for a, b in zip(tank, reactor) if a != b]
+        # Exactly the three control-constant lines differ (bias/num/den).
+        self.assertEqual(len(diff), 3)
+        for line in diff:
+            self.assertRegex(line, r"BIAS_PM|KP_NUM|KP_DEN")
 
 
 if __name__ == "__main__":

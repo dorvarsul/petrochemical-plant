@@ -7,7 +7,7 @@ path is the dependency-free fake-PLC tests in test_bridge.py.
 
 Prerequisites (see plc/README.md):
   cd plc && docker compose up -d
-  # load bpcs.st into bpcs (8081) and sis.st into sis (8082), compile, Start PLC
+  python3 -m plc.load_scenario tank   # loads+compiles+starts BPCS & SIS (match SCENARIO)
   PETROTWIN_LIVE=1 python3 -m unittest tests.test_bridge_live -v
 
 Note: the SIS high-level trip latches and has no reset input in Phase 0, so
@@ -76,16 +76,32 @@ class TestLiveRoundTrip(unittest.TestCase):
             self.assertEqual(self.bpcs.read_holding(R.BpcsHolding.PV), value)
             self.assertEqual(self.sis.read_holding(R.SisHolding.PV), value)
 
-    def test_bpcs_drives_feed_open(self):
-        # With bpcs.st running, the fill-valve command should read fully open.
-        deadline = time.time() + 1.5
-        val = None
-        while time.time() < deadline:
-            val = self.bpcs.read_holding(R.BpcsHolding.FEED_CMD)
-            if val == R.VALVE_REG_MAX:
-                break
-            time.sleep(0.05)
-        self.assertEqual(val, R.VALVE_REG_MAX)
+    def test_bpcs_control_loop_tracks_setpoint(self):
+        # With bpcs.st running, the actuator command must follow the integer
+        # proportional law for (PV, SETPOINT) — i.e. the program REACTS, not just
+        # a read-back. Includes the off-scale attack setpoint (actuator saturates).
+        def idiv(a, b):
+            return int(a / b)  # trunc toward zero, matching IEC/ST
+
+        def expected(pv, sp):
+            raw = SC.ctrl_bias_pm + idiv(SC.ctrl_kp_num * (sp - pv), SC.ctrl_kp_den)
+            return max(0, min(R.VALVE_REG_MAX, raw))
+
+        cases = [
+            (SC.setpoint_reg, SC.setpoint_reg),                 # at setpoint -> bias
+            (SC.setpoint_reg, SC.attack_setpoint_reg),          # attack -> saturated
+            (min(SC.reg_full_scale, SC.setpoint_reg + 300), SC.setpoint_reg),
+        ]
+        for pv, sp in cases:
+            self.bpcs.write_holding(R.BpcsHolding.PV, pv)
+            self.bpcs.write_holding(R.BpcsHolding.SETPOINT, sp)
+            exp, deadline, val = expected(pv, sp), time.time() + 1.5, None
+            while time.time() < deadline:
+                val = self.bpcs.read_holding(R.BpcsHolding.FEED_CMD)
+                if val == exp:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(val, exp, f"pv={pv} sp={sp}")
 
     def test_trip_then_override_suppresses_it(self):
         # Healthy SIS: at/above the threshold the trip asserts.

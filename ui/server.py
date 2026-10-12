@@ -71,6 +71,8 @@ class SimRunner(threading.Thread):
                 "truth": {"level": sc.pv0, "fraction": f0, "overflowing": False},
                 "hmi": {"level": sc.pv0, "fraction": f0, "trip_status": False},
                 "feed": 1.0, "trip": False, "attacked": attacked,
+                "setpoint": sc.setpoint, "setpoint_frac": sc.fraction(sc.setpoint),
+                "setpoint_tampered": False, "override": False,
                 "scenario": _scenario_meta(sc)}
 
     def _connect(self, attempts=12):
@@ -113,6 +115,10 @@ class SimRunner(threading.Thread):
             return dict(self._snap)
 
     def _warmup(self):
+        # Seed the operator's safe setpoint before the run (and again after a
+        # reset); the bridge never rewrites it afterwards, so an attacker's
+        # setpoint written over Modbus persists until the next reset.
+        self.bridge.prime_setpoint()
         done = 0
         while done < 4:
             try:
@@ -121,11 +127,17 @@ class SimRunner(threading.Thread):
             except Exception:
                 time.sleep(0.5)
                 self._connect()
+                self.bridge.prime_setpoint()
             time.sleep(SETTLE)
         self.model.reset()
 
-    def _publish(self, s, attacked):
+    def _publish(self, s):
         H = self.scenario.pv_full_scale
+        sc = self.scenario
+        # Attack state is READ back from the PLCs each cycle, so an external
+        # attacker (attack.py over Modbus) is reflected the same as the button.
+        sp_tampered = abs(s.setpoint - sc.setpoint) > 0.5 / sc.reg_scale
+        attacked = bool(s.override or sp_tampered)
         with self._lock:
             self._snap = {
                 "time": round(s.time, 1), "status": "running",
@@ -138,7 +150,11 @@ class SimRunner(threading.Thread):
                 "feed": round(s.feed, 3),
                 "trip": s.trip_cmd,
                 "attacked": attacked,
-                "scenario": _scenario_meta(self.scenario),
+                "setpoint": round(s.setpoint, 3),
+                "setpoint_frac": round(min(max(s.setpoint / H, 0.0), 1.0), 4),
+                "setpoint_tampered": sp_tampered,
+                "override": bool(s.override),
+                "scenario": _scenario_meta(sc),
             }
 
     def _load_scenario_live(self, sid):
@@ -155,12 +171,10 @@ class SimRunner(threading.Thread):
         # The server loads the chosen scenario's programs itself, so the only
         # prerequisite is that the two OpenPLC containers are up.
         self._load_scenario_live(self.scenario.id)
-        attacked = False
         while not self._stop:
             if self._switch_to:
                 sid, self._switch_to = self._switch_to, None
                 self._attack = self._reset = False
-                attacked = False
                 try:
                     self._load_scenario_live(sid)
                 except Exception:
@@ -170,19 +184,21 @@ class SimRunner(threading.Thread):
             if self._reset:
                 self._reset = False
                 self._attack = False
-                attacked = False
                 self._set_status("loading")
-                restart_runtime(BPCS_WEB)
+                restart_runtime(BPCS_WEB)   # clears the override coil + %MW setpoint
                 restart_runtime(SIS_WEB)
                 self._connect()
-                self._warmup()
+                self._warmup()              # re-seeds the safe setpoint
             try:
                 if self._attack:
-                    self.sis.write_coil(R.SisCoil.OVERRIDE, True)  # the attack, over Modbus
-                    attacked = True
+                    # Same two writes the external attacker (attack.py) makes:
+                    # manipulate the control setpoint AND defeat the SIS.
+                    self.bpcs.write_holding(R.BpcsHolding.SETPOINT,
+                                            self.scenario.attack_setpoint_reg)
+                    self.sis.write_coil(R.SisCoil.OVERRIDE, True)
                     self._attack = False
                 s = self.bridge.step()
-                self._publish(s, attacked)
+                self._publish(s)
             except Exception:
                 time.sleep(0.5)  # transient Modbus hiccup -> reconnect and continue
                 try:

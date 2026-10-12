@@ -62,12 +62,18 @@ PETROTWIN_LIVE=1 .venv/bin/python -m unittest tests.test_bridge_live -v
 ```
 
 The dashboard loads the chosen scenario's PLC programs itself (step 2 is for the
-terminal demo / tests); its dropdown switches scenarios live by recompiling the SIS.
+terminal demo / tests); its dropdown switches scenarios live by recompiling the PLCs.
 
-The attack can also be launched from the CLI:
+**Baseline vs. attack.** With no attacker the BPCS holds the process at its safe
+setpoint and the SIS never trips — the baseline just runs. The attack is external,
+over Modbus: it writes a malicious control setpoint to the BPCS (driving the process
+toward failure) **and** overrides the SIS (suppressing the trip and freezing the
+HMI). Launch it from the CLI (or the dashboard's "Inject attack" button, which makes
+the same writes):
 ```bash
-.venv/bin/python -m attack.attack            # set SIS_OVERRIDE
-.venv/bin/python -m attack.attack --reset    # clear it
+.venv/bin/python -m attack.attack reactor            # force setpoint + SIS_OVERRIDE
+.venv/bin/python -m attack.attack reactor --setpoint-only  # only the setpoint (SIS catches it)
+.venv/bin/python -m attack.attack reactor --reset    # stand down (restore setpoint, clear override)
 ```
 
 ## Layout
@@ -76,12 +82,12 @@ common/       scenarios.py — per-scenario truth (PV, scaling, thresholds, phys
               registers.py — authoritative Modbus map   + tests/test_{scenarios,registers}.py
 physics/      base.py + tank.py / vessel.py / reactor.py ODE models (ground truth)
               make_model(id) factory   + tests/test_{tank,vessel,reactor}.py
-plc/          bpcs.st (shared), sis.st (template), load_scenario.py, docker-compose (OpenPLC v3)
-              + tests/test_plc_programs.py
+plc/          bpcs.st (setpoint-control template), sis.st (trip template), load_scenario.py,
+              docker-compose (OpenPLC v3)   + tests/test_plc_programs.py
 bridge/       scenario-agnostic Modbus bridge loop; fake + real PLC clients; demos
               + tests/test_bridge.py (fake) / test_bridge_live.py (real, opt-in)
-ui/           server.py + static/dashboard.html (HMI + Three.js 3D, scenario selector)
-attack/       attack.py — SIS_OVERRIDE over Modbus (scenario-independent)
+ui/           server.py + static/dashboard.html (HMI + Three.js full-process 3D, selector)
+attack/       attack.py — external Modbus attacker: force BPCS setpoint + SIS_OVERRIDE
 ```
 
 Default tests are dependency-free (stdlib `unittest`); `pymodbus`/`pyserial`

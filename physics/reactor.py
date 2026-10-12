@@ -7,16 +7,26 @@ heat it releases feeds back into the temperature — the runaway mechanism.
 
     k(T)   = k0 * exp(-E / (T + 273.15))        reaction rate constant
     r      = k(T) * C                            reaction rate (mol/L/s)
-    dC/dt  = q * (C_in - C) - r                  q = feed * F_over_V
-    dT/dt  = beta * r - cool * (T - Tc)          cool = base, or max on trip
+    dC/dt  = q * (C_in - C) - r                  q fixed (reactant throughput)
+    dT/dt  = beta * r - cool * (T - Tc)
 
-  * ``feed`` ∈ [0,1] is the BPCS reactant feed. Held open it keeps the reactor
-    charged (``C`` high), so the exotherm outpaces the *base* cooling and the
-    temperature climbs toward runaway.
-  * ``trip`` is the SIS high-temperature interlock: it forces the cooling jacket
-    to maximum, which overpowers the exotherm and pulls the temperature back
-    down. The attack suppresses ``trip`` — cooling stays at the insufficient base
-    rate and the reactor runs away while the HMI shows a nominal temperature.
+Unlike the tank/vessel (whose BPCS actuator ADDS to the PV), the reactor's
+actuator REMOVES energy. ``feed_cmd`` here is the **coolant-valve fraction**
+``u`` ∈ [0,1] the BPCS temperature loop modulates, and the reactant throughput
+is fixed:
+
+    cool = cool_trip (SIS emergency)  else  cool_min + u*(cool_ctrl - cool_min)
+
+  * At the baseline the BPCS holds ``u`` ≈ 0.5 (coolant valve half open), which
+    balances the exotherm at the 80 °C setpoint.
+  * The attack writes a malicious high temperature setpoint, so the controller
+    (believing the reactor is far too cold) drives ``u`` → 0 — the coolant valve
+    shuts, cooling falls to ``cool_min``, and the exotherm runs away.
+  * ``trip`` is the SIS high-temperature interlock: it forces ``cool_trip``
+    (emergency cooling, far above the control range), overpowering the exotherm
+    and pulling the temperature back down. The attack suppresses ``trip`` — so
+    emergency cooling never engages and the reactor runs to failure while the
+    HMI shows a nominal temperature.
 
 Temperature is clamped to ``[Tc, fail_at]``; reaching ``fail_at`` latches the
 ``runaway`` failure flag. Integrated with a small sub-stepped explicit Euler so
@@ -54,11 +64,12 @@ class ReactorModel:
         self.k0 = float(p["k0"])
         self.E = float(p["E"])
         self.beta = float(p["beta"])
-        self.F_over_V = float(p["F_over_V"])
+        self.q = float(p["q"])                 # fixed reactant throughput
         self.C_in = float(p["C_in"])
         self.C0 = float(p["C0"])
-        self.cool_base = float(p["cool_base"])
-        self.cool_max = float(p["cool_max"])
+        self.cool_min = float(p["cool_min"])   # coolant valve shut (u=0): runaway
+        self.cool_ctrl = float(p["cool_ctrl"]) # coolant valve full (u=1): normal max
+        self.cool_trip = float(p["cool_trip"]) # SIS emergency cooling (overrides u)
         self.Tc = float(p["Tc"])
         self._fail = self.scenario.fail_at
         self.reset()
@@ -97,11 +108,13 @@ class ReactorModel:
     def step(self, dt: float, feed_cmd: float, trip: bool = False) -> float:
         if dt <= 0:
             raise ValueError("dt must be > 0")
-        feed = clamp(feed_cmd, 0.0, 1.0)
-        self.applied_feed = feed
+        u = clamp(feed_cmd, 0.0, 1.0)  # coolant-valve fraction from the BPCS
+        # Display the actuator the operator acts on: the coolant valve. On an
+        # SIS trip the emergency cooling runs the jacket wide open.
+        self.applied_feed = 1.0 if trip else u
 
-        q = feed * self.F_over_V
-        cool = self.cool_max if trip else self.cool_base
+        q = self.q  # reactant throughput is fixed; the BPCS controls cooling
+        cool = self.cool_trip if trip else self.cool_min + u * (self.cool_ctrl - self.cool_min)
         h = dt / _SUBSTEPS
 
         T, C = self.temperature, self.concentration
@@ -127,16 +140,16 @@ class ReactorModel:
 
 
 def _demo() -> None:
-    """Standalone sanity run: feed open, cooling trip defeated (no trip)."""
+    """Standalone sanity run: coolant valve shut (attack), SIS trip defeated."""
     rx = ReactorModel()
     s = rx.scenario
     dt = 1.0
     t_trip = t_fail = None
     print(f"Reactor runaway demo | {s.unit_tag}  trip_hh={s.trip_hh} °C  "
-          f"runaway={s.fail_at} °C  (cooling trip defeated)\n")
+          f"runaway={s.fail_at} °C  (coolant valve shut, SIS trip defeated)\n")
     print(f"{'t (s)':>7} {'T (°C)':>9} {'C (mol/L)':>10} {'frac':>7}  status")
     for _ in range(600):
-        rx.step(dt, feed_cmd=1.0, trip=False)
+        rx.step(dt, feed_cmd=0.0, trip=False)
         if t_trip is None and rx.temperature >= s.trip_hh:
             t_trip = rx.time
         if t_fail is None and rx.runaway:

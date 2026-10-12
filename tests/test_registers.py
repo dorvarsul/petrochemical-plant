@@ -30,6 +30,7 @@ class TestMapInvariants(unittest.TestCase):
         keys = set(R.REGISTERS)
         expected = {
             (R.Instance.BPCS, "holding", R.BpcsHolding.PV),
+            (R.Instance.BPCS, "holding", R.BpcsHolding.SETPOINT),
             (R.Instance.BPCS, "holding", R.BpcsHolding.FEED_CMD),
             (R.Instance.SIS, "coil", R.SisCoil.TRIP_CMD),
             (R.Instance.SIS, "coil", R.SisCoil.TRIP_STATUS),
@@ -80,6 +81,15 @@ class TestMapInvariants(unittest.TestCase):
             info = R.REGISTERS[(inst, "holding", pv)]
             self.assertTrue(info.st_var.startswith("%MW"), info.st_var)
             self.assertGreaterEqual(int(pv), R.MW_HOLDING_BASE)
+
+    def test_setpoint_is_writable_memory_word(self):
+        # The BPCS setpoint is master->program (operator/attacker writes it), so
+        # it must be a %MW memory word for the write to reach the program.
+        info = R.REGISTERS[(R.Instance.BPCS, "holding", R.BpcsHolding.SETPOINT)]
+        self.assertTrue(info.st_var.startswith("%MW"), info.st_var)
+        self.assertEqual(info.direction, "attack->PLC")
+        self.assertGreaterEqual(int(R.BpcsHolding.SETPOINT), R.MW_HOLDING_BASE)
+        self.assertNotEqual(int(R.BpcsHolding.SETPOINT), int(R.BpcsHolding.PV))
 
     def test_qx_mapping_matches_address(self):
         # OpenPLC %QXn.m -> coil n*8+m; coils live in byte 0.
