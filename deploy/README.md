@@ -27,6 +27,33 @@ This folder holds the per-PC rationale and detail that file links to.
               inter-VLAN routing on the switch
 ```
 
+## One-command per-PC scripts (easiest)
+
+Each PC has a single wrapper that does everything for its layer — no manual
+`docker compose`, `pip`, or env juggling. On that PC (repo cloned, `cd petrotwin`):
+
+| PC  | Command | Does |
+|-----|---------|------|
+| PC2 | `deploy/pc2-control-plc/pc2.sh start` | load/build the OpenPLC image, run the BPCS container, open the firewall |
+| PC3 | `deploy/pc3-safety-plc/pc3.sh start`  | same, for the SIS container (the attack target) |
+| PC1 | `deploy/pc1-physics-3d/pc1.sh start`  | make the venv + deps, source `hosts.env`, launch the LIVE physics + 3D server |
+| PC4 | `deploy/pc4-hmi/pc4.sh start`         | make the venv + deps, source `hosts.env`, launch the standalone HMI |
+| atk | `deploy/attacker/attack.sh reactor --plant` | run the §9 attack |
+
+Order: **PC2 and PC3 first, then PC1, then PC4.** Every script also takes
+`stop` / `restart` / `status` / `logs` (the two PLC scripts add `recreate` for a
+clean container; the Python ones add `setup` to only build the venv). They are a
+thin, no-compose convenience layer over the *exact same* images, ports, and
+programs documented below and in `DEPLOY.md` — the manual `docker compose` /
+`pip` steps still work identically if you prefer them.
+
+**Offline (air-gapped):** point the scripts at the USB kit with
+`export KIT=/media/<usb>/petrotwin-kit` (they also auto-detect a `petrotwin-kit`
+sibling of the repo, or one under `/media` / `/mnt`). `start` then loads the
+image from the kit's `openplc-v3.tar` and installs the wheels with `--no-index`
+— see [`DEPLOY-OFFLINE.md`](../docs/DEPLOY-OFFLINE.md). Fill in `deploy/hosts.env`
+(PC2/PC3 IPs) first, same as the manual path.
+
 ## What changed in the repo to make this possible
 
 Nothing about the simulation, the PLC logic, or the register map. Only how a

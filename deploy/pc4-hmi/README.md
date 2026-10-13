@@ -1,5 +1,10 @@
 # PC4 — standalone operator HMI
 
+> **Quick start:** `deploy/pc4-hmi/pc4.sh start` does the whole bring-up (venv +
+> deps, `source hosts.env`, launch the HMI). Also `stop` / `restart` / `status`
+> / `logs` / `setup`. Offline: `export KIT=/media/<usb>/petrotwin-kit` first.
+> (Bring up PC2, PC3 and PC1 before PC4 — this HMI has no fake fallback.)
+
 Runs `ui/hmi_server.py`: a **Modbus TCP master** that polls PC2 (BPCS) and
 PC3 (SIS) directly over the network and renders the operator mimic
 (`ui/static/hmi.html`). This process **never imports the physics model** —

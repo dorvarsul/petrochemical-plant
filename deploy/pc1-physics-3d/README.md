@@ -1,5 +1,10 @@
 # PC1 — Physics + 3D (ground truth)
 
+> **Quick start:** `deploy/pc1-physics-3d/pc1.sh start` does the whole bring-up
+> below (venv + deps, `source hosts.env`, launch the LIVE server). Also
+> `stop` / `restart` / `status` / `logs` / `setup`. Offline: `export
+> KIT=/media/<usb>/petrotwin-kit` first. (Bring up PC2 + PC3 before PC1.)
+
 Runs the Python ODE plant, the Modbus bridge (a **Modbus TCP master** reaching
 PC2 + PC3), and the web server for the 3D ground-truth view — and, for
 convenience, the bundled `/hmi` tab too (not the "real" distributed HMI; see

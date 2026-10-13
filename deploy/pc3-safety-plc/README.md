@@ -1,5 +1,10 @@
 # PC3 — Safety PLC (SIS) — the attack target
 
+> **Quick start:** `deploy/pc3-safety-plc/pc3.sh start` loads/builds the image,
+> runs the container (plain `docker run`, no compose), and opens the firewall.
+> Also `stop` / `restart` / `recreate` / `status` / `logs`. Offline: `export
+> KIT=/media/<usb>/petrotwin-kit` first to load the image from the USB kit.
+
 Runs **one** OpenPLC v3 container: the Safety Instrumented System. It is a
 **Modbus TCP slave**, independent of PC2's BPCS — holds the high-high trip
 logic and the maintenance bypass (`SIS_OVERRIDE`) the attack defeats.

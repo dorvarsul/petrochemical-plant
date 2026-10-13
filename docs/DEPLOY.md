@@ -15,6 +15,16 @@ development"** at the bottom — nothing here is one-way.
 > stage a USB kit and load it — then come back here for §2 onward, which is the
 > same either way.
 
+> **Prefer one command per PC?** Each PC has a wrapper script that runs its whole
+> bring-up (image load/build + `docker run`, or venv + launch) with **no manual
+> `docker compose`/`pip`**: run `deploy/pc2-control-plc/pc2.sh start`,
+> `deploy/pc3-safety-plc/pc3.sh start`, then `deploy/pc1-physics-3d/pc1.sh start`,
+> then `deploy/pc4-hmi/pc4.sh start`, and `deploy/attacker/attack.sh reactor
+> --plant` for §9. They wrap the exact same steps spelled out below — use them or
+> the manual steps, both land in the same place. Offline: `export
+> KIT=/media/<usb>/petrotwin-kit` first. Still do §2 (`hosts.env`) and the §5
+> reachability check by hand. See `deploy/README.md` → "One-command per-PC scripts".
+
 ## 0. What you need
 
 - 4 Ubuntu Linux PCs, wired to one **layer-3 (routed) switch** — **one VLAN /

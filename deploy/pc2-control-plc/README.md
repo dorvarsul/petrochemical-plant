@@ -1,5 +1,10 @@
 # PC2 — Control PLC (BPCS)
 
+> **Quick start:** `deploy/pc2-control-plc/pc2.sh start` loads/builds the image,
+> runs the container (plain `docker run`, no compose), and opens the firewall.
+> Also `stop` / `restart` / `recreate` / `status` / `logs`. Offline: `export
+> KIT=/media/<usb>/petrotwin-kit` first to load the image from the USB kit.
+
 Runs **one** OpenPLC v3 container: the Basic Process Control System. It is a
 **Modbus TCP slave** — PC1's bridge writes sensor values and reads the
 actuator command; PC4's HMI and the attacker also reach it directly.

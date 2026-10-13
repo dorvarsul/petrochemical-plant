@@ -1,5 +1,10 @@
 # Attacker — any host the L3 switch routes to the PLC subnets
 
+> **Quick start:** `deploy/attacker/attack.sh reactor --plant` ensures the venv,
+> sources `hosts.env`, and runs the attack. Swap `reactor` for `tank` / `vessel`;
+> add `--no-bypass`, `--setpoint-only`, or `--reset`. `--plant` is required
+> against the connected whole-plant stack. No args defaults to `reactor --plant`.
+
 `attack/attack.py` is unchanged — it already only ever talked to the plant
 over Modbus (never to physics, never through the HMI). In the distributed
 layout it becomes a **faithful on-network adversary**: run it from any
