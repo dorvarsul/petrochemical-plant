@@ -9,6 +9,12 @@ per-PC notes under `deploy/`; this file is the *exact commands*, in order.
 Coming back to this after the 4-PC week? See **"Returning to single-PC
 development"** at the bottom — nothing here is one-way.
 
+> **No internet on the deployment PCs?** This file assumes each PC can reach the
+> internet once (to build the OpenPLC image and `pip install`). For an
+> **air-gapped** site, first follow [`DEPLOY-OFFLINE.md`](DEPLOY-OFFLINE.md) to
+> stage a USB kit and load it — then come back here for §2 onward, which is the
+> same either way.
+
 ## 0. What you need
 
 - 4 Ubuntu Linux PCs, wired to one **layer-3 (routed) switch** — **one VLAN /

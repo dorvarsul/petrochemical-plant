@@ -12,7 +12,9 @@ process to physical failure — for defensive research and training.
 All project docs now live in **[`docs/`](docs/)**. Start with
 **[OVERVIEW.md](docs/OVERVIEW.md)**, then **[PHYSICAL-MODEL.md](docs/PHYSICAL-MODEL.md)**
 (what the plant and the OT facility actually are), **[ARCHITECTURE.md](docs/ARCHITECTURE.md)**,
-**[ROADMAP.md](docs/ROADMAP.md)**, **[TESTING.md](docs/TESTING.md)**. Working agreement for
+**[ROADMAP.md](docs/ROADMAP.md)**, **[TESTING.md](docs/TESTING.md)**. To stand the
+testbed up across four PCs: **[DEPLOY.md](docs/DEPLOY.md)** (air-gapped site:
+**[DEPLOY-OFFLINE.md](docs/DEPLOY-OFFLINE.md)**). Working agreement for
 future sessions: **[CLAUDE.md](CLAUDE.md)** (kept at the repo root).
 
 This is the Triton attack **pattern**, not its **mechanism** (OpenPLC ≠ Triconex;
