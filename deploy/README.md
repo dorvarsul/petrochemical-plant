@@ -11,7 +11,9 @@ scenarios, or the attack. See `ROADMAP.md` ("Distributed deployment") and
 
 **Start here:** **[`DEPLOY.md`](../docs/DEPLOY.md)** in `docs/` has the
 exact, copy-pasteable step-by-step instructions for the full 4-PC bring-up.
-This folder holds the per-PC rationale and detail that file links to.
+This folder holds the per-PC rationale and detail that file links to. The L3
+switch itself (Cisco Catalyst 9200-24: cabling, VLANs, ACLs) is
+**[`DEPLOY-SWITCH.md`](../docs/DEPLOY-SWITCH.md)**.
 
 ```
   PC1  physics + 3D  (ground truth; bridge = Modbus TCP master)

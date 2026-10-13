@@ -29,10 +29,13 @@ development"** at the bottom — nothing here is one-way.
 
 - 4 Ubuntu Linux PCs, wired to one **layer-3 (routed) switch** — **one VLAN /
   subnet per layer** (PC1, PC2, PC3, PC4 each in its own), with **inter-VLAN
-  routing enabled on the switch** and TCP **502/8081/8082/8092** permitted
-  between the physics (PC1) and HMI (PC4) subnets and the PLC subnets (PC2, PC3).
-  Wired, not Wi-Fi — less jitter. (Switch VLAN/routing config is vendor-specific;
-  do it before step 5.)
+  routing enabled on the switch** and TCP **5020/5021** (Modbus) +
+  **8081/8082** (OpenPLC web UI) permitted from the physics (PC1) and HMI (PC4)
+  subnets to the PLC subnets (PC2, PC3) — the PLC containers' *host* ports, so
+  the switch never sees 502. Wired, not Wi-Fi — less jitter. Do the switch
+  before step 5: for the lab's **Cisco Catalyst 9200-24**, follow
+  [`DEPLOY-SWITCH.md`](DEPLOY-SWITCH.md) (cabling, VLANs, SVIs, static IPs, NTP
+  from the switch, and the per-VLAN ACLs).
 - `git`, Python 3.10+, and (on PC2/PC3 only) Docker + the Compose plugin.
 - Each PC's IP address **in its own layer's subnet** (`ip addr show` — note the
   one on the switch-facing interface, not any VPN/Wi-Fi interface). The PLCs are
@@ -139,7 +142,7 @@ nc -zv "$PETROTWIN_SIS_HOST" 5021 && nc -zv "$PETROTWIN_SIS_HOST" 8082
 
 All four must say `succeeded`. If any fails, it's a firewall rule on PC2/PC3
 (step 3/4), or the L3 switch not routing between PC1's VLAN and the PLC VLANs
-(inter-VLAN routing disabled, a missing route, or an ACL blocking 502/8081/8082)
+(inter-VLAN routing disabled, a missing route, or an ACL blocking 5020/5021/8081/8082)
 — fix it here before continuing; nothing past this point will work until these
 four connect. (`ip route get "$PETROTWIN_BPCS_HOST"` on PC1 should show the route
 out via the switch.)
@@ -280,7 +283,7 @@ Nothing above is one-way. Back on your usual dev machine:
 
 | Symptom | Likely cause |
 |---|---|
-| `nc -zv` fails in step 5 | Firewall on PC2/PC3 (step 3/4), or the L3 switch not routing PC1's VLAN to the PLC VLANs (inter-VLAN routing off, missing route, or an ACL blocking 502/8081/8082) — check `ip route get <PLC-IP>` on PC1 |
+| `nc -zv` fails in step 5 | Firewall on PC2/PC3 (step 3/4), or the L3 switch not routing PC1's VLAN to the PLC VLANs (inter-VLAN routing off, missing route, or an ACL blocking 5020/5021/8081/8082) — check `ip route get <PLC-IP>` on PC1, and `show access-lists` on the switch ([`DEPLOY-SWITCH.md`](DEPLOY-SWITCH.md) §8.4) |
 | PC1 logs `LIVE unavailable (...)` and falls back to fake PLCs | PC2/PC3 not up yet, wrong IP in `hosts.env`, or a port blocked — re-run step 5 |
 | `hmi_server` refuses to start, names a host:port | Same as above — it has no fallback by design; fix reachability first |
 | HMI and 3D disagree even with no attack running | A stale attack/bypass left over from a previous session — `curl -X POST http://<PC1-IP>:8092/api/reset` to restart both PLC runtimes cleanly |

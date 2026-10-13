@@ -7,9 +7,11 @@ a short pre-flight checklist to tick off before you start:
 
 - [ ] All four PCs wired (not Wi-Fi — less jitter) into one **L3 (routed)
       switch**, each layer in its **own VLAN/subnet**.
-- [ ] L3 switch configured: inter-VLAN routing on, and 502/8081/8082/8092
-      permitted between PC1/PC4's subnets and the PC2/PC3 (PLC) subnets.
-      Verify with `ip route get <PLC-IP>` and `nc -zv <PLC-IP> 502` from PC1.
+- [ ] L3 switch configured per [`DEPLOY-SWITCH.md`](../docs/DEPLOY-SWITCH.md)
+      (Catalyst 9200-24): inter-VLAN routing on, and 5020/5021 (Modbus) +
+      8081/8082 (OpenPLC web) permitted from PC1/PC4's subnets to the PC2/PC3
+      (PLC) subnets by the per-VLAN ACLs. Verify with `ip route get <PLC-IP>`
+      and `nc -zv <BPCS-IP> 5020` / `nc -zv <SIS-IP> 5021` from PC1.
 - [ ] NTP enabled on all four (`timedatectl` shows synchronized) — the
       cross-machine time-sync risk in `ROADMAP.md` is real; don't skip this.
 - [ ] `deploy/hosts.env` created from `hosts.env.example`, filled in (IPs in

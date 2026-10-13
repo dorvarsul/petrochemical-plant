@@ -128,7 +128,8 @@ Cross-machine time drift is the single biggest risk for this testbed (four
 processes exchanging Modbus I/O), and you won't have public NTP. Pick one:
 
 - **Best — a local NTP source.** If your switch/router or any one PC can serve
-  NTP on the lab network, point the other three at it. With `chrony` on the
+  NTP on the lab network, point the other three at it (the lab's Catalyst 9200
+  can: `ntp master` — see [`DEPLOY-SWITCH.md`](DEPLOY-SWITCH.md) §5). With `chrony` on the
   clients, in `/etc/chrony/chrony.conf`:
   ```
   server <NTP-server-IP> iburst
