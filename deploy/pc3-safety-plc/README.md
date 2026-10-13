@@ -14,8 +14,9 @@ logic and the maintenance bypass (`SIS_OVERRIDE`) the attack defeats.
    ```
 3. Confirm: `docker ps` shows `petrotwin-sis`; `curl -I http://localhost:8082/`
    answers.
-4. **Open the two ports to the L2**: `502` (mapped to host `5021`) and
-   `8080` (mapped to host `8082`), reachable from PC1, PC4, and the attacker:
+4. **Open the two ports across the routed network**: `502` (mapped to host
+   `5021`) and `8080` (mapped to host `8082`), reachable — over the L3 switch's
+   inter-VLAN routing — from PC1, PC4, and the attacker:
    ```
    sudo ufw allow 5021/tcp
    sudo ufw allow 8082/tcp
@@ -24,12 +25,15 @@ logic and the maintenance bypass (`SIS_OVERRIDE`) the attack defeats.
 
 ## This is the box the demo is about
 
-The whole point of the testbed is that an attacker on the L2 can reach this
-PLC's `SIS_OVERRIDE` coil over Modbus and freeze `SIS_PV_HMI` while the real
-process (PC1) runs past failure. Nothing special to configure for that here
-— the attack surface is just "this Modbus slave is reachable on the
-network", which bringing it up on its own PC on the L2 makes literally true
-instead of a loopback simulation of it.
+The whole point of the testbed is that an attacker whose traffic the L3 switch
+routes to this VLAN can reach this PLC's `SIS_OVERRIDE` coil over Modbus and
+freeze `SIS_PV_HMI` while the real process (PC1) runs past failure. Putting the
+SIS on its **own VLAN/subnet** is exactly the "SIS on a separate network"
+posture — the attack now has to cross the inter-VLAN routing hop (and whatever
+ACLs the switch enforces) to get here, instead of sitting on a flat segment with
+it. Nothing special to configure in the container for that; bringing it up on
+its own PC/VLAN makes "this Modbus slave is reachable across the routed network"
+literally true instead of a loopback simulation of it.
 
 ## What NOT to do here
 

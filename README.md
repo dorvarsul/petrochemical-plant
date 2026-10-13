@@ -9,12 +9,14 @@ process to physical failure — for defensive research and training.
 > over Modbus (spoofable); the 3D view reads the physics directly (unspoofable).
 > That divergence is the whole point.
 
-Start with **[OVERVIEW.md](OVERVIEW.md)**, then **[ARCHITECTURE.md](ARCHITECTURE.md)**,
-**[ROADMAP.md](ROADMAP.md)**, **[TESTING.md](TESTING.md)**. Working agreement for
-future sessions: **[CLAUDE.md](CLAUDE.md)**.
+All project docs now live in **[`docs/`](docs/)**. Start with
+**[OVERVIEW.md](docs/OVERVIEW.md)**, then **[PHYSICAL-MODEL.md](docs/PHYSICAL-MODEL.md)**
+(what the plant and the OT facility actually are), **[ARCHITECTURE.md](docs/ARCHITECTURE.md)**,
+**[ROADMAP.md](docs/ROADMAP.md)**, **[TESTING.md](docs/TESTING.md)**. Working agreement for
+future sessions: **[CLAUDE.md](CLAUDE.md)** (kept at the repo root).
 
 This is the Triton attack **pattern**, not its **mechanism** (OpenPLC ≠ Triconex;
-Modbus override, not a TriStation exploit). See the scope limit in `OVERVIEW.md`.
+Modbus override, not a TriStation exploit). See the scope limit in `docs/OVERVIEW.md`.
 
 ## Status: **all three scenarios, working end to end (live)**
 

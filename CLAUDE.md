@@ -52,11 +52,13 @@ control, one SIS for all three units' safety — via per-unit OFFSET register bl
 GENERATED 3-instance ST program per slave (`plc/load_scenario.py` `load_plant`);
 no extra containers, single-unit map stays canonical (unit 0 = tank). Proven by
 `tests/test_plant_live.py`. Phase 2 is DONE. Phase 2.5 is a DEPLOYMENT-only
-split onto FOUR Ubuntu Linux PCs on one L2 Ethernet segment — PC1 physics+3D,
-PC2 control PLC, PC3 safety PLC, PC4 HMI; `localhost:5020/5021` becomes Modbus
-TCP to real host IPs, physics+3D stay co-located so the direct tap stays a
+split onto FOUR Ubuntu Linux PCs behind one L3 (routed) switch, each layer in its
+own VLAN/subnet — PC1 physics+3D, PC2 control PLC, PC3 safety PLC, PC4 HMI;
+`localhost:5020/5021` becomes Modbus TCP to real host IPs ROUTED across the L3
+switch between subnets, physics+3D stay co-located so the direct tap stays a
 local (unspoofable) read, layers/register-map/attack unchanged, still
-Modbus-only. **Software done, physical 4-PC run pending**: every host/port is
+Modbus-only (now with basic per-layer VLAN segmentation; deeper IEC-62443
+zone/conduit + pcap is Phase 3). **Software done, physical 4-PC run pending**: every host/port is
 now read from `common/deploy_config.py` (one env var per address, defaulting
 to the old localhost layout — nothing above changes unless you set one); PC4
 runs a genuinely standalone, physics-blind HMI (`ui/hmi_server.py`, a Modbus
@@ -66,7 +68,7 @@ file is split one-container-per-PC (`deploy/pc2-control-plc/`,
 per-unit offset so it hits the right unit of the CONNECTED plant instead of
 always unit 0/tank — a real pre-existing bug this surfaced and fixed); and
 `deploy/` has a README + checklist per PC. All exercised against the real
-OpenPLC pair on one host (loopback standing in for the L2); see
+OpenPLC pair on one host (loopback standing in for the routed network); see
 `deploy/README.md` "Status" for what that does and doesn't prove, and
 `deploy/checklist.md` for the real multi-PC bring-up. OpenModelica is the
 FINAL phase.
@@ -103,8 +105,11 @@ Pick/run a scenario with the `tank|vessel|reactor` arg or `PETROTWIN_SCENARIO`.
   stay byte-for-byte logically identical to the ST programs.
 
 ## Repo conventions
-- Docs in repo root: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / ATTACKS / DEPLOY / this file.
-- One authoritative Modbus register map (ARCHITECTURE.md); no scattered addresses.
+- Docs live in `docs/`: OVERVIEW / ARCHITECTURE / ROADMAP / TESTING / ATTACKS / DEPLOY /
+  PHYSICAL-MODEL. Only `README.md` and this `CLAUDE.md` stay at the repo root
+  (`CLAUDE.md` so Claude Code auto-loads it). Per-component READMEs (`deploy/*`, `plc/`)
+  stay beside their code.
+- One authoritative Modbus register map (`docs/ARCHITECTURE.md`); no scattered addresses.
 - Keep claims consistent across all docs.
 
 ## Run / test

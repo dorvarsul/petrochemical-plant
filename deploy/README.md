@@ -1,14 +1,15 @@
 # PetroTwin — Phase 2.5 distributed deployment
 
 Moves the **same software** that runs on one host (Phase 0–2) onto **four
-physical Ubuntu Linux PCs on one layer-2 Ethernet segment** — one PC per
-layer. It is a **deployment-topology change only**: no change to the four
+physical Ubuntu Linux PCs behind one layer-3 (routed) switch, each layer in its
+own VLAN/subnet** — one PC per layer. It is a **deployment-topology change only**
+(now with basic per-layer VLAN segmentation): no change to the four
 layers, the two-PLC split, the two data taps, the register map, the
 scenarios, or the attack. See `ROADMAP.md` ("Distributed deployment") and
 `ARCHITECTURE.md` ("Deployment topology") for the why; this folder is the
 *how*.
 
-**Start here:** **[`DEPLOY.md`](../DEPLOY.md)** at the repo root has the
+**Start here:** **[`DEPLOY.md`](../docs/DEPLOY.md)** in `docs/` has the
 exact, copy-pasteable step-by-step instructions for the full 4-PC bring-up.
 This folder holds the per-PC rationale and detail that file links to.
 
@@ -18,11 +19,12 @@ This folder holds the per-PC rationale and detail that file links to.
         ├──Modbus TCP──► PC2  Control PLC / BPCS   (OpenPLC slave)
         └──Modbus TCP──► PC3  Safety PLC  / SIS     (OpenPLC slave)
 
-  PC4  standalone HMI (Modbus TCP master; polls PC2 + PC3 directly)
+  PC4  standalone HMI (Modbus TCP master; polls PC2 + PC3, routed)
 
-  attacker = any extra host on the same L2 (attack/attack.py)
+  attacker = any extra host the switch routes to the PLC subnets (attack/attack.py)
 
-              all on ONE L2 Ethernet switch
+              all behind ONE L3 (routed) switch — one VLAN/subnet per layer,
+              inter-VLAN routing on the switch
 ```
 
 ## What changed in the repo to make this possible
@@ -58,18 +60,20 @@ process finds another process:
 | PC2 | [`pc2-control-plc/`](pc2-control-plc/README.md) | the Control PLC (BPCS) OpenPLC container |
 | PC3 | [`pc3-safety-plc/`](pc3-safety-plc/README.md) | the Safety PLC (SIS) OpenPLC container — the attack target |
 | PC4 | [`pc4-hmi/`](pc4-hmi/README.md) | the standalone operator HMI |
-| —   | [`attacker/`](attacker/README.md) | the external attack script — any host on the L2 |
+| —   | [`attacker/`](attacker/README.md) | the external attack script — any host the switch routes to the PLC subnets |
 
 `checklist.md` in this folder is a short pre-flight checklist; `DEPLOY.md`
-(repo root) is the actual bring-up walkthrough.
+(in `docs/`) is the actual bring-up walkthrough.
 
 ## Status (honest)
 
 The host/port plumbing above is implemented, unit-tested (fake-PLC path,
 unchanged), and exercised against the real OpenPLC pair **on one machine**
 (loopback standing in for real PC-to-PC IPs — pymodbus TCP does not
-distinguish the two, but it is not the same as a real L2 run). What has
+distinguish the two, but it is not the same as a real routed, VLAN-segmented
+run). What has
 **not** been exercised here: an actual run across four separate physical
-PCs, real NIC/switch latency, and the cross-machine time-sync risk
-`ROADMAP.md` calls out for this phase. Run the `checklist.md` acceptance
-sequence on the real hardware before calling Phase 2.5 done.
+PCs, the L3 switch's per-layer VLANs + inter-VLAN routing, real NIC/switch
+latency, and the cross-machine time-sync risk `ROADMAP.md` calls out for this
+phase. Run the `checklist.md` acceptance sequence on the real hardware before
+calling Phase 2.5 done.

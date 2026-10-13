@@ -1,12 +1,14 @@
-# Attacker — any extra host on the L2
+# Attacker — any host the L3 switch routes to the PLC subnets
 
 `attack/attack.py` is unchanged — it already only ever talked to the plant
 over Modbus (never to physics, never through the HMI). In the distributed
 layout it becomes a **faithful on-network adversary**: run it from any
-machine on the same L2 segment (a 5th box, or PC4, or even your own laptop
-plugged into the switch) and it reaches PC2/PC3 exactly the way a real
-attacker on the segment would — no code path is different from the
-single-host demo, only the network hop is now real.
+machine the switch will route to PC2/PC3's subnets (a 5th box, or PC4, or even
+your own laptop plugged into the switch) and it reaches PC2/PC3 exactly the way
+a real attacker would — no code path is different from the single-host demo,
+only now its Modbus writes **traverse the inter-VLAN routing hop** on the L3
+switch (subject to that switch's ACLs) to reach the SIS, and that routed hop is
+where Phase 3 will capture the pcap.
 
 ## Setup
 

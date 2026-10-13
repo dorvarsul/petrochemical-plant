@@ -9,12 +9,12 @@ useful and demonstrable at the end of every phase, not only at the end.
 |-------|-------------------------------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------|
 | **0** | **Demo (PROTECTED)**          | done (2 working days) | **ONE** scenario. Python physics, OpenPLC control + safety, lightweight HMI, Three.js ground truth, Modbus bridge, attack script. **Modbus-only, one scenario.** | **Live run:** normal → inject attack → **HMI green while 3D goes to rupture.** (See `TESTING.md` acceptance test.)          |
 | 0.5   | Multi-scenario (Python physics) | done        | All **3 scenarios** (tank overfill, vessel overpressure, reactor runaway) on pure-Python ODEs, selectable through every layer (physics, both PLCs, bridge, HMI/3D, attack). Three **independent single-unit** sims — one runs at a time. **Still Modbus-only; no OpenModelica.**            | Live run per scenario: normal → attack → HMI green while 3D passes the failure threshold. All three pass (see `TESTING.md`). |
-| **1** | **Connected plant (single flowsheet)** | core done (Python/fake-PLC path) | Couple the three units into **ONE continuously-running plant**: `T-101` feed tank → `R-301` reactor → `V-201` separation vessel, with shared streams (tank outflow **is** the reactor feed; reactor product **is** the vessel inflow). Plausible hand-tuned physics whose mass/energy balances are consistent **across** the couplings — still Python ODEs, still Modbus-only. Each "scenario" is reframed as **which unit the attack targets** inside the one plant, not a separate sim. *(Live OpenPLC multi-unit stack + register-map extension folded into Phase 2.)* | **Met** on the Python + in-memory-PLC path: `physics/plant.py` + `bridge/plant_bridge.py`, proven by `tests/test_plant.py` (criteria P1–P7 in `TESTING.md`) and shown by `bridge.run_plant_demo`. No attacker → connected steady state, no trips; attacking a unit drives **that** unit past failure while neighbours respond plausibly (forward coupling) and a healthy SIS holds the manual-drive-with-SIS-armed case safe. The BPCS/SIS now carry real-SIF realism (setpoint clamp, AUTO/MANUAL + rate limit, pre-alarm/bad-PV/deadband reset, maintenance bypass), the attack is driven through MANUAL mode, and the terminal FILL/EXPORT valves are real coils with a P-401 level sink. |
+| **1** | **Connected plant (single flowsheet)** | core done (Python/fake-PLC path) | Couple the three units into **ONE continuously-running plant**: `T-101` feed tank → `R-301` reactor → `V-201` gas vessel, with shared streams (tank outflow **is** the reactor feed; reactor product **is** the vessel inflow). Plausible hand-tuned physics whose mass/energy balances are consistent **across** the couplings — still Python ODEs, still Modbus-only. Each "scenario" is reframed as **which unit the attack targets** inside the one plant, not a separate sim. *(Live OpenPLC multi-unit stack + register-map extension folded into Phase 2.)* | **Met** on the Python + in-memory-PLC path: `physics/plant.py` + `bridge/plant_bridge.py`, proven by `tests/test_plant.py` (criteria P1–P7 in `TESTING.md`) and shown by `bridge.run_plant_demo`. No attacker → connected steady state, no trips; attacking a unit drives **that** unit past failure while neighbours respond plausibly (forward coupling) and a healthy SIS holds the manual-drive-with-SIS-armed case safe. The BPCS/SIS now carry real-SIF realism (setpoint clamp, AUTO/MANUAL + rate limit, pre-alarm/bad-PV/deadband reset, maintenance bypass), the attack is driven through MANUAL mode, and the terminal FILL/EXPORT valves are real coils with a P-401 level sink. |
 | **2** | **Whole-plant visualization + live stack** | done | HMI + Three.js show the **entire connected flowsheet at once** (all three units + the interconnecting streams), not one unit in isolation. Streams, levels, pressures and temperatures animate from the physics; the attacked unit is highlighted; spoofable HMI vs unspoofable 3D ground truth span the whole plant. The whole-plant visualization runs on **both** the dependency-free fake-PLC path and the **live OpenPLC pair** — `ui/plant_server.py` + `ui/static/plant.html` (`./run_plant.sh start`, or `python3 -m ui.plant_server [--live]`): a three-tile spoofable HMI strip over one unspoofable 3D ground-truth train, attack any unit, couplings animated. The live stack carries all three units on the **two existing slaves** — one BPCS for all three units' control, one SIS for all three units' safety — via per-unit **offset blocks** (`registers.unit_addr`) and one generated **3-instance ST program** per slave (`plc.load_scenario.load_plant`); no extra containers. | Operator watches the full plant live; during an attack the targeted unit runs to failure in the 3D ground truth while its HMI tile stays green, **and** the propagation to neighbouring units is visible. **Met** on the fake-PLC path and on real OpenPLC (`tests/test_plant_live.py`). |
-| **2.5** | **Distributed deployment (4-PC, L2)** | software done; physical 4-PC run pending | Move off a single host: run the stack as **four physical Ubuntu Linux PCs on one layer-2 Ethernet segment** — (1) **Physics + 3D** (ground-truth sim and the Three.js view, kept together so the direct physics tap stays a *local* shared-state read), (2) **Control PLC / BPCS**, (3) **Safety PLC / SIS**, (4) **HMI** (now a genuinely standalone, physics-blind Modbus master — `ui/hmi_server.py`). The Modbus bridge runs on the physics PC and reaches the two PLC hosts over **Modbus TCP across the L2** instead of `localhost`; the HMI polls the PLC hosts over the same L2. No change to layers, logic, register map or scenarios — this is a **deployment-topology** change, still Modbus-only. See *Distributed deployment* below and `deploy/README.md`. | Full normal → attack → (HMI green while 3D passes threshold) run reproduced with each layer on its own PC over the L2; the direct physics→3D tap never crosses the network; the attacker runs as a **real host on the L2** reaching the PLCs over Modbus TCP. **Met in software** (host/port config in `common/deploy_config.py`, standalone HMI, per-PC `deploy/` folders, exercised against the real OpenPLC pair on one host as a loopback stand-in); the real 4-PC/L2 run itself is the one thing still untested here — see `deploy/README.md` "Status". |
-| 3     | Network / protocol realism    | ~1 week       | OPC-UA alongside Modbus, historian, engineering workstation, Purdue-level segmentation, attack **captured as pcap**.                           | Segmented network stands up; attack traverses it and is captured as a replayable pcap.                                     |
+| **2.5** | **Distributed deployment (4-PC, L3)** | software done; physical 4-PC run pending | Move off a single host: run the stack as **four physical Ubuntu Linux PCs behind one layer-3 (routed) switch, each layer in its own VLAN/subnet** — (1) **Physics + 3D** (ground-truth sim and the Three.js view, kept together so the direct physics tap stays a *local* shared-state read), (2) **Control PLC / BPCS**, (3) **Safety PLC / SIS**, (4) **HMI** (now a genuinely standalone, physics-blind Modbus master — `ui/hmi_server.py`). The Modbus bridge runs on the physics PC and reaches the two PLC hosts over **Modbus TCP, routed across the L3 switch** instead of `localhost`; the HMI polls the PLC hosts over the same routed fabric. No change to layers, logic, register map or scenarios — this is a **deployment-topology** change (now with basic per-layer VLAN segmentation), still Modbus-only. See *Distributed deployment* below and `deploy/README.md`. | Full normal → attack → (HMI green while 3D passes threshold) run reproduced with each layer on its own PC/VLAN, routed by the L3 switch; the direct physics→3D tap never crosses the network; the attacker runs as a **real host on the network** reaching the PLCs over Modbus TCP, its traffic now **crossing the L3 boundary** (subject to the switch's inter-VLAN routing/ACLs). **Met in software** (host/port config in `common/deploy_config.py`, standalone HMI, per-PC `deploy/` folders, exercised against the real OpenPLC pair on one host as a loopback stand-in); the real 4-PC/L3 run itself is the one thing still untested here — see `deploy/README.md` "Status". |
+| 3     | Network / protocol realism    | ~1 week       | OPC-UA alongside Modbus, historian, engineering workstation, a **deeper IEC-62443 zone/conduit model** (ACLs/firewall rules between the Phase-2.5 VLANs, DMZ), attack **captured as pcap** at the routed boundary.                           | Zoned/conduited network stands up on top of the Phase-2.5 VLANs; attack traverses it and is captured as a replayable pcap.                                     |
 | 4     | Triton-mechanism realism      | 1–2 weeks     | Emulate a proprietary TriStation-like **safety protocol** so the attack exploits a *protocol*, not just Modbus register writes.                | Attack succeeds by exploiting the emulated safety protocol, not by direct register writes.                                 |
-| **5** | **Physics migration → OpenModelica (FINAL)** | 1–2 weeks | Replace the hand-tuned Python ODEs with **validated OpenModelica / FMI** models of the **same connected flowsheet**: real units + geometry, relief sizing, sensor noise, actuator & transport dynamics. Swapped **behind the existing `model.step(dt, feed_cmd, trip)` interface** so the bridge / PLC / HMI / 3D layers are unchanged. | Validated connected model reproduces known steady states; all three target scenarios run to failure with realistic timing; **no change required above the physics layer.** |
+| **5** | **Physics migration → OpenModelica (FINAL)** | 1–2 weeks | Replace the hand-tuned Python ODEs with **validated OpenModelica / FMI** models of the **same connected flowsheet**: real units + geometry, relief sizing, sensor noise, actuator & transport dynamics. Swapped **behind the existing `model.step(dt, feed_cmd, trip)` interface** so the bridge / PLC / HMI / 3D layers are unchanged. **Also add a real separator unit** (see *Add a separator* below). | Validated connected model reproduces known steady states; all three target scenarios run to failure with realistic timing; **no change required above the physics layer.** |
 | —     | **Out of scope (separate project)** | months; hardware + legal | Real or virtualized **Triconex** hardware + original malware analysis.                                                                 | The realism ceiling. Opened **only as a funded decision**, not as a default next step.                                     |
 
 ## The connected plant (Phase 1–2 target)
@@ -39,7 +39,7 @@ flowsheet.
             feed                 product                 vapour/overpressure
   ┌────────┐  flow   ┌─────────┐  flow    ┌──────────┐    relief
   │ T-101  ├────────►│  R-301  ├─────────►│  V-201   ├────────►
-  │  feed  │         │ reactor │          │separation│
+  │  feed  │         │ reactor │          │   gas    │
   │  tank  │         │  (CSTR) │          │  vessel  │
   └────────┘         └─────────┘          └──────────┘
    overfill          runaway               overpressure
@@ -75,15 +75,16 @@ flowsheet.
 > access), the OpenPLC compose file is split one-container-per-PC
 > (`deploy/pc2-control-plc/`, `deploy/pc3-safety-plc/`), and each PC has its
 > own README under `deploy/`. All of it is exercised against the real OpenPLC
-> pair on one host (loopback standing in for the L2) — see `deploy/README.md`
-> "Status" for exactly what that does and doesn't prove. What's still open is
-> the physical run itself: four separate PCs, a real switch, real NTP — see
-> `deploy/checklist.md`.
+> pair on one host (loopback standing in for the routed network) — see
+> `deploy/README.md` "Status" for exactly what that does and doesn't prove. What's
+> still open is the physical run itself: four separate PCs, a real L3 switch with
+> the per-layer VLANs configured, real NTP — see `deploy/checklist.md`.
 
 Phases 0–2 run every layer as co-operating processes on **one host** (`localhost`
 Modbus ports 5020/5021, the 3D view reading physics via in-process shared
 state/IPC). Phase 2.5 keeps that exact software and splits it across **four
-physical PCs on a single layer-2 Ethernet segment**, all running Ubuntu Linux:
+physical PCs behind one layer-3 (routed) switch — each layer in its own
+VLAN/subnet**, all running Ubuntu Linux:
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -102,7 +103,8 @@ physical PCs on a single layer-2 Ethernet segment**, all running Ubuntu Linux:
         └─────────────────┘          │ └─────────────────┘    │
                    ▲                  │          ▲             │
                    └──────────────────┴──────────┴─────────────┘
-                              L2 Ethernet switch
+                     L3 (routed) switch — one VLAN/subnet per layer,
+                              inter-VLAN routing on the switch
                                      ▲
                             ┌────────┴─────────┐
                             │ PC4 — HMI        │
@@ -111,31 +113,60 @@ physical PCs on a single layer-2 Ethernet segment**, all running Ubuntu Linux:
                             └──────────────────┘
 ```
 
-- **One PC per layer.** PC1 = Physics + 3D; PC2 = Control PLC (BPCS); PC3 =
-  Safety PLC (SIS); PC4 = HMI. All four are Ubuntu Linux hosts on one **L2**
-  (single broadcast domain, no routing/segmentation yet — segmentation is still
-  Phase 3).
+- **One PC per layer, one VLAN per layer.** PC1 = Physics + 3D; PC2 = Control PLC
+  (BPCS); PC3 = Safety PLC (SIS); PC4 = HMI. All four are Ubuntu Linux hosts, each
+  in its **own VLAN/subnet** behind a single **layer-3 (routed) switch** that does
+  the inter-VLAN routing. This gives basic **Purdue-style segmentation** (the SIS
+  really is on its own network) already in Phase 2.5; the *deeper* IEC-62443
+  zone/conduit model — ACLs/firewall rules between the VLANs, a DMZ, and pcap
+  capture — is Phase 3.
 - **Physics and 3D stay on the same PC — on purpose.** The core invariant is
   that the 3D ground-truth view reads the physics model **directly** (shared
   state/IPC), never over the network. Co-locating them on PC1 keeps that tap a
   *local* read, so it remains **unspoofable** by anything on the wire. Putting
-  the 3D view on its own PC would force the ground truth across the L2 and break
-  the invariant — so it is explicitly **not** done.
+  the 3D view on its own PC would force the ground truth across the network and
+  break the invariant — so it is explicitly **not** done.
 - **`localhost` → real IPs, same register map.** The bridge on PC1 opens Modbus
   **TCP** connections to PC2 and PC3 by IP:502 (or the chosen port) instead of
-  `localhost:5020/5021`; the HMI on PC4 polls the same two hosts. Nothing else
-  moves: the four layers, the two-PLC split, the two data taps, the register map
+  `localhost:5020/5021`, now **routed across the L3 switch** between subnets; the
+  HMI on PC4 polls the same two hosts the same way. Nothing else moves: the four
+  layers, the two-PLC split, the two data taps, the register map
   (`common/registers.py`, including the per-unit offset blocks), the scenarios
   and the attack logic are all unchanged. The only new configuration is a
-  **host/IP map** (which layer lives at which address) replacing hard-coded
-  `localhost`.
-- **The attacker becomes a real host on the L2.** Today the attack script is
-  another local process; distributed, it runs from a machine on the same L2
-  segment and reaches the PLCs over Modbus TCP — a faithful on-network adversary,
-  which is why this is a worthwhile step even before segmentation/pcap (Phase 3).
+  **host/IP map** (which layer lives at which address/subnet) replacing hard-coded
+  `localhost`, plus the switch's VLAN/routing setup.
+- **The attacker becomes a real host whose traffic crosses the L3 boundary.**
+  Today the attack script is another local process; distributed, it runs from a
+  machine the switch will route to the PLC subnets, so its Modbus writes now
+  **traverse the layer-3 hop** to reach the SIS (subject to the switch's
+  inter-VLAN routing/ACLs) — a more faithful on-network adversary, and the routed
+  hop is exactly where Phase 3 will capture the attack as a pcap.
 - **Still Modbus-only; still hand-tuned Python physics.** No OPC-UA, no
-  OpenModelica, no new scenarios. This phase changes *where the processes run*,
-  not *what they do*.
+  OpenModelica, no new scenarios. This phase changes *where the processes run* and
+  *how the network is segmented*, not *what the layers do*.
+
+## Add a separator (Phase 5, with OpenModelica)
+
+> **Why this is now a roadmap item.** V-201 was modelled as a vapour/liquid
+> **separator** in name, but its only ODE is vessel *pressure* — it never actually
+> performs a phase split, and its 3D model has since been changed to a plain
+> **gas (pressure) vessel** to stop overclaiming what the physics does. A real
+> petrochemical train, however, *needs* genuine separation: crude and reactor
+> product are multiphase, and nothing downstream is realistic without a unit that
+> splits vapour from liquid.
+
+Once the physics layer is on **validated OpenModelica / FMI** models, add a
+**dedicated separator** unit to the connected flowsheet — a two- or three-phase
+separation drum with its own holdup, level and pressure states, an overhead
+vapour stream to the flare/compression, and a liquid bottoms stream to product
+storage. This is deliberately deferred to Phase 5 because a *faithful* separator
+is a multi-phase thermodynamic model (flash calculations, K-values, phase
+envelopes) that only becomes worthwhile on the validated-physics path — doing it
+on hand-tuned Python ODEs would be plausible-looking but not real, exactly the
+trap the "plausible now, validated last" principle avoids. Until then V-201
+stays an honest single-state **gas vessel** (overpressure → relief), and the
+separator is tracked here as the piece needed to make the plant a realistic
+petrochemical facility.
 
 ## Why OpenModelica is last, not first
 
@@ -185,12 +216,14 @@ demo. Get one scenario looping cleanly first; add realism only after.
 
 **New risk from Phase 2.5 onward — real-network time-sync.** Distributing the four
 layers onto separate PCs turns the in-host sync loop into one that crosses a real
-L2 segment: added link latency/jitter, independent machine clocks, and no shared
-process scheduler. This is the single-host time-sync risk amplified, not a new
-class of problem. Mitigation: a wired, lightly-loaded L2 switch; a common time
-base across the four PCs (NTP, or PTP if drift shows); keep the bridge/HMI poll
-periods comfortably above the observed round-trip; and re-run the connected
-steady-state acceptance test over the network **before** injecting any attack.
+**routed** network: added link latency/jitter — now including the **inter-VLAN
+routing hop** on the L3 switch — independent machine clocks, and no shared process
+scheduler. This is the single-host time-sync risk amplified, not a new class of
+problem. Mitigation: a wired, lightly-loaded L3 switch with the per-layer VLANs
+kept simple (line-rate routing, no heavy ACLs yet); a common time base across the
+four PCs (NTP, or PTP if drift shows); keep the bridge/HMI poll periods comfortably
+above the observed round-trip; and re-run the connected steady-state acceptance
+test over the network **before** injecting any attack.
 
 **New risk from Phase 1 onward — cross-unit coupling.** Once the three units share
 streams, a disturbance (or an attack) on one unit propagates to its neighbours.

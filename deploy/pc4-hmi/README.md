@@ -14,7 +14,7 @@ becomes a structural fact about what this process can even see.
 2. Copy `deploy/hosts.env.example` → `deploy/hosts.env`, fill in PC2/PC3's
    real IPs, and `source deploy/hosts.env`. Make sure
    `PETROTWIN_HMI_BIND_HOST=0.0.0.0` is set if you want to view the HMI from
-   another PC on the L2 (e.g. a control-room laptop); the default
+   another PC the switch routes to PC4 (e.g. a control-room laptop); the default
    `127.0.0.1` serves PC4 only.
 3. **PC2 and PC3 must already be up and have the plant programs loaded**
    (done from PC1 — see `deploy/pc1-physics-3d/README.md`). This process has
@@ -26,7 +26,7 @@ becomes a structural fact about what this process can even see.
    ```
    or directly: `PYTHONPATH="$(pwd)" .venv/bin/python -m ui.hmi_server`.
 5. Open `http://127.0.0.1:8093/` (or `http://<PC4-IP>:8093/` from another
-   PC on the L2).
+   PC the switch routes to PC4).
 
 ## What you'll see
 

@@ -17,10 +17,11 @@ actuator command; PC4's HMI and the attacker also reach it directly.
 3. Confirm it's up: `docker ps` should show `petrotwin-bpcs`, and
    `curl -I http://localhost:8081/` should answer (OpenPLC's web UI,
    login `openplc`/`openplc`).
-4. **Open the two ports to the L2** (firewall): `502` (Modbus, mapped to host
-   `5020`) and `8080` (web UI, mapped to host `8081`) must be reachable from
-   PC1 (the program loader + the bridge), PC4 (the HMI), and the attacker
-   host. If `ufw` is active:
+4. **Open the two ports across the routed network** (firewall): `502` (Modbus,
+   mapped to host `5020`) and `8080` (web UI, mapped to host `8081`) must be
+   reachable — over the L3 switch's inter-VLAN routing — from PC1 (the program
+   loader + the bridge), PC4 (the HMI), and the attacker host. If `ufw` is
+   active:
    ```
    sudo ufw allow 5020/tcp
    sudo ufw allow 8081/tcp

@@ -14,9 +14,10 @@ that failure unfold in a lab so they can study how to detect and prevent it.
 
 Nothing here touches a real plant. Every "device" is a simulation or an open-source
 soft component. Through Phase 2 it all runs on **one workstation**; Phase 2.5
-splits the four layers onto **four Ubuntu Linux PCs on one layer-2
-Ethernet segment** (physics+3D, control PLC, safety PLC, HMI) — a
-deployment-topology change only, still Modbus (now Modbus TCP over the L2). The
+splits the four layers onto **four Ubuntu Linux PCs behind one layer-3 (routed)
+switch, each layer in its own VLAN/subnet** (physics+3D, control PLC, safety PLC,
+HMI) — a deployment-topology change only (now with basic per-layer segmentation),
+still Modbus (now Modbus TCP routed across the switch). The
 software side of that split is implemented (see `deploy/README.md`); the
 physical 4-PC run is the one piece still pending. See `ROADMAP.md` / `ARCHITECTURE.md`.
 
@@ -93,7 +94,7 @@ The protected Phase-0 demo used **one** scenario; all three are implemented on
 pure-Python ODE physics and are selectable through every layer (Phase 0.5) as
 three independent single-unit sims. **Phase 1 also wires them into one
 continuously-running plant** — `T-101` feed tank → `R-301` reactor → `V-201`
-separation vessel, with forward-coupled streams (an overfilling tank warms the
+gas vessel, with forward-coupled streams (an overfilling tank warms the
 reactor; a runaway reactor pressurises the vessel) — so each scenario becomes
 **the unit the attack targets** inside the same flowsheet. This runs today on the
 Python + in-memory-PLC path (`physics/plant.py`, `bridge/run_plant_demo.py`). The

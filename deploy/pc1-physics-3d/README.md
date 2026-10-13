@@ -4,7 +4,7 @@ Runs the Python ODE plant, the Modbus bridge (a **Modbus TCP master** reaching
 PC2 + PC3), and the web server for the 3D ground-truth view — and, for
 convenience, the bundled `/hmi` tab too (not the "real" distributed HMI; see
 PC4). This PC must be a real machine with a GUI/browser if you want to watch
-the 3D view locally, but any browser on the L2 can also point at it (the
+the 3D view locally, but any browser the switch routes to PC1 can also point at it (the
 *data* it serves never crossed the network to get computed — see
 "why this stays unspoofable" below).
 
@@ -27,8 +27,8 @@ your laptop) opening `http://<PC1-IP>:8092/` is fine.
 2. Copy `deploy/hosts.env.example` to `deploy/hosts.env`, fill in PC2/PC3's
    real IPs, and `source deploy/hosts.env`.
 3. Make sure `PETROTWIN_PLANT_BIND_HOST=0.0.0.0` is set (in `hosts.env` or
-   exported) if you want to view the 3D tab from another PC on the L2;
-   leave it at the `127.0.0.1` default to view only locally on PC1.
+   exported) if you want to view the 3D tab from another PC the switch routes
+   to PC1; leave it at the `127.0.0.1` default to view only locally on PC1.
 4. Start: `./run_plant.sh start` (from the repo root). This:
    - brings up... **nothing** on PC1 itself (PC2/PC3's OpenPLC containers run
      on *their* PCs now — PC1 only needs network access to them, not Docker).

@@ -142,15 +142,17 @@ two OpenPLC instances are Modbus slaves on `localhost` ports 5020/5021, the brid
 and HMI are masters on the same host, and the 3D view reads the physics model via
 in-process shared state/IPC. The diagram above is this single-host layout.
 
-### Phase 2.5 — distributed four-PC over an L2 segment
+### Phase 2.5 — distributed four-PC behind an L3 (routed) switch
 
-The same software splits across **four physical Ubuntu Linux PCs on one layer-2
-Ethernet segment** — one PC per layer. This is a deployment change only: the four
-layers, the two-PLC split, the two data taps, the register map and the attack are
-all unchanged. The host/port plumbing (`common/deploy_config.py`), the standalone
-PC4 HMI (`ui/hmi_server.py`), and the per-PC `deploy/` folders are implemented and
-exercised against the real OpenPLC pair on one host; the physical 4-PC/L2 run is
-the one thing not yet done — see `deploy/README.md` "Status".
+The same software splits across **four physical Ubuntu Linux PCs behind one
+layer-3 (routed) switch, each layer in its own VLAN/subnet** — one PC per layer.
+This is a deployment change only: the four layers, the two-PLC split, the two data
+taps, the register map and the attack are all unchanged. The host/port plumbing
+(`common/deploy_config.py`), the standalone PC4 HMI (`ui/hmi_server.py`), and the
+per-PC `deploy/` folders are implemented and exercised against the real OpenPLC
+pair on one host; the physical 4-PC/L3 run (separate PCs, the switch's VLANs and
+inter-VLAN routing) is the one thing not yet done — see `deploy/README.md`
+"Status".
 
 | PC  | Layer hosted                 | Role on the wire                                  |
 |-----|------------------------------|---------------------------------------------------|
@@ -166,23 +168,30 @@ the one thing not yet done — see `deploy/README.md` "Status".
                                       └─► PC3  Safety PLC  / SIS  (slave)
    PC4  HMI: Modbus TCP master ───────────► PC2, PC3  (poll only)
 
-                all four on ONE L2 Ethernet switch (single broadcast domain)
+        all four behind ONE L3 (routed) switch — one VLAN/subnet per layer,
+        inter-VLAN routing on the switch
 ```
 
 Key points, all preserving the invariants above:
 
 - **Physics and 3D stay co-located on PC1.** The unspoofable data tap depends on
   the 3D view reading physics **directly**. Co-locating them keeps that read
-  local; it must **never** be served across the L2, or the ground truth becomes
-  spoofable. This is why the 3D view does not get its own PC.
+  local; it must **never** be served across the network, or the ground truth
+  becomes spoofable. This is why the 3D view does not get its own PC.
 - **`localhost` → real IPs.** The bridge (PC1) and HMI (PC4) address the PLCs by
-  host IP and port over **Modbus TCP** instead of `localhost:5020/5021`. The only
-  new configuration is a **host/IP map** (layer → address); the register map and
-  all addresses inside it are unchanged.
-- **The attacker is a real on-segment host.** It reaches the PLCs over Modbus TCP
-  from a machine on the same L2 — a faithful on-network adversary.
-- **L2 only (no segmentation yet).** One broadcast domain, no Purdue-level
-  segmentation, OPC-UA, historian or pcap capture — those remain Phase 3.
+  host IP and port over **Modbus TCP** instead of `localhost:5020/5021`, now
+  **routed between subnets by the L3 switch**. The only new configuration is a
+  **host/IP map** (layer → address/subnet) plus the switch's VLAN/routing setup;
+  the register map and all addresses inside it are unchanged.
+- **The attacker's traffic crosses the L3 boundary.** It reaches the PLCs over
+  Modbus TCP from a machine the switch routes to the PLC subnets, so its writes
+  now **traverse the inter-VLAN routing hop** (subject to the switch's ACLs) — a
+  faithful on-network adversary, and the routed hop is where Phase 3 captures the
+  pcap.
+- **Basic L3 segmentation now; deeper zoning in Phase 3.** Per-layer VLANs give
+  Purdue-style separation already (the SIS on its own network); the fuller
+  IEC-62443 zone/conduit model (ACLs/firewall between VLANs, DMZ), OPC-UA,
+  historian and pcap capture remain Phase 3.
 - **Amplified risk: cross-machine time-sync.** The bridge/PLC/HMI sync loop now
   crosses a real network (link latency/jitter, independent clocks). Mitigate with
   a common time base (NTP, PTP if needed) and poll periods above the observed
@@ -233,7 +242,7 @@ physical meaning of the protective action:
 > **Connected plant (Phase 1–2, see `ROADMAP.md`).** The register map below is the
 > **single-unit block**: exactly one PV/BPCS/SIS set, as the standalone sims use
 > it. The connected plant runs all three units as **one flowsheet** — `T-101`
-> feed tank → `R-301` reactor → `V-201` separation vessel, forward-coupled (tank
+> feed tank → `R-301` reactor → `V-201` gas vessel, forward-coupled (tank
 > overfill warms the reactor; reactor runaway pressurises the vessel) — with each
 > scenario reframed as *which unit the attack targets*.
 >

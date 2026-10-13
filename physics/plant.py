@@ -16,7 +16,7 @@ every ``step``. The only new physics is the FORWARD coupling between them:
     throughput ``q`` (``reactor.q_coupling``): more reactant -> more reaction ->
     the reactor runs hotter. So overfilling the tank *stresses* the reactor.
   * **Reactor -> Vessel.** A hotter reactor product flashes more vapour into the
-    downstream separation drum, so it is added to the vessel's pressure-rise
+    downstream gas vessel, so it is added to the vessel's pressure-rise
     (``vessel.p_coupling``): a reactor running hot *pressurises* the vessel.
 
 Both couplings are written as a gain times the UPSTREAM unit's **deviation above
