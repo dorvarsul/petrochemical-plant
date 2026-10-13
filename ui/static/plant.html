@@ -94,22 +94,32 @@
   var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
   var scene = new THREE.Scene();
   scene.background = new THREE.Color(0x6b727b);
-  scene.fog = new THREE.Fog(0x6b727b, 55, 135);
+  scene.fog = new THREE.Fog(0x6b727b, 30, 95);
+  // room shell dimensions — one source of truth, shared by the camera clamp
+  // (below) and the plant-hall builder further down. Interior spans
+  // x:[cx-hx, cx+hx], z:[cz-hz, cz+hz], floor fY .. ceiling cY.
+  var ROOM = { cx: 2, cz: 0, hx: 26, hz: 26, fY: -2.46, cY: 13 };
   var camera = new THREE.PerspectiveCamera(52, 1, 0.1, 260);
-  camera.position.set(1.5, 8.6, 32);
+  camera.position.set(1.5, 6.4, 23);
   camera.lookAt(1.5, 0.4, 0);
 
   // ---- orbit camera (right-drag to rotate, wheel to zoom; no auto-rotation) ----
   var camTarget = new THREE.Vector3(1.5, 0.4, 0);
-  var camR = 33, camTheta = 0, camPhi = 1.32;   // spherical offset from target
+  var camR = 24, camTheta = 0, camPhi = 1.32;   // spherical offset from target
   function updateCamera() {
     camPhi = Math.max(0.25, Math.min(1.45, camPhi));
-    camR = Math.max(12, Math.min(34, camR));   // capped so the camera stays inside the compact hall
+    camR = Math.max(10, Math.min(24, camR));   // capped so the camera stays inside the (now smaller) room walls
     var sp = Math.sin(camPhi);
     camera.position.set(
       camTarget.x + camR * sp * Math.sin(camTheta),
       camTarget.y + camR * Math.cos(camPhi),
       camTarget.z + camR * sp * Math.cos(camTheta));
+    // keep the camera inside the room shell so a wide/high orbit can't poke
+    // through the walls or the (now low) ceiling.
+    var m = 1.5;
+    camera.position.x = Math.max(ROOM.cx - ROOM.hx + m, Math.min(ROOM.cx + ROOM.hx - m, camera.position.x));
+    camera.position.z = Math.max(ROOM.cz - ROOM.hz + m, Math.min(ROOM.cz + ROOM.hz - m, camera.position.z));
+    camera.position.y = Math.min(ROOM.cY - m, camera.position.y);
     camera.lookAt(camTarget);
   }
   updateCamera();
@@ -129,14 +139,14 @@
     new THREE.MeshStandardMaterial({ color: 0x141a22, roughness: 1 }));
   grade.position.set(2, -2.25, 0); rig.add(grade);
   // ground reference grid (a 3D floor grid, sitting just above the hall floor)
-  var grid = new THREE.GridHelper(80, 40, 0xc2cad4, 0x828b96);
+  var grid = new THREE.GridHelper(52, 26, 0xc2cad4, 0x828b96);
   grid.position.set(2, -2.42, 0);
   grid.material.transparent = true; grid.material.opacity = 0.8;
   rig.add(grid);
 
   // ---- plant hall: an enclosing room so the scene reads as an indoor facility ----
   (function () {
-    var cx = 2, cz = 0, hx = 40, hz = 40, fY = -2.46, cY = 38, midY = (fY + cY) / 2, H = cY - fY;
+    var cx = ROOM.cx, cz = ROOM.cz, hx = ROOM.hx, hz = ROOM.hz, fY = ROOM.fY, cY = ROOM.cY, midY = (fY + cY) / 2, H = cY - fY;
     function plane(w, h, mat) { return new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat); }
     var floorMat = new THREE.MeshStandardMaterial({ color: 0x53585f, roughness: 1 });
     var wallMat  = new THREE.MeshStandardMaterial({ color: 0x79818b, roughness: 1 });
@@ -156,7 +166,7 @@
     for (var i = -2; i <= 2; i++) {
       var lamp = new THREE.Mesh(new THREE.BoxGeometry(6, 0.2, 0.8), lampMat);
       lamp.position.set(cx + i * 9, cY - 1.4, cz); scene.add(lamp);
-      var ll = new THREE.PointLight(0xe3edf8, 0.18, 60, 2); ll.position.set(cx + i * 9, cY - 3.5, cz); scene.add(ll);
+      var ll = new THREE.PointLight(0xe3edf8, 0.10, 28, 2); ll.position.set(cx + i * 9, cY - 3.5, cz); scene.add(ll);
     }
   })();
 
@@ -231,7 +241,7 @@
     this.geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
     this.mat = new THREE.PointsMaterial({ color: opt.color, size: opt.size || 0.11,
       transparent: true, opacity: opt.opacity == null ? 0.75 : opt.opacity,
-      blending: THREE.AdditiveBlending, depthWrite: false });
+      blending: opt.blending == null ? THREE.AdditiveBlending : opt.blending, depthWrite: false });
     this.points = new THREE.Points(this.geo, this.mat); parent.add(this.points);
     this.rate = opt.rate || 60; this.acc = 0; this.active = false;
   }
@@ -598,7 +608,10 @@
     // (MeshBasic) so it reads on any background.
     var embers = new Emitter(flare, { origin: V(0, oY + 0.1, 0), dir: V(0, 1, 0), speed: 2.0, spread: 0.12, jitter: 1.0, gravity: -1.6, color: 0xffb24a, size: 0.06, life: 0.9, count: 70, rate: 0, opacity: 0.95 });
     var puffs  = new Emitter(flare, { origin: V(0, oY + 0.05, 0), dir: V(0, 1, 0), speed: 1.0, spread: 0.18, jitter: 0.3, gravity: 0.4, color: 0xff7a26, size: 0.16, life: 0.7, count: 110, rate: 0, opacity: 0.5 });
-    var smoke  = new Emitter(flare, { origin: V(0, oY + 0.8, 0), dir: V(0.2, 1, 0), speed: 1.0, spread: 0.28, jitter: 0.4, gravity: 0.22, color: 0x3a3a3a, size: 0.30, life: 1.6, count: 90, rate: 0, opacity: 0.0 });
+    // A little sooty BLACK smoke off the tip. Unlike the embers/puffs above, this
+    // one uses NORMAL (not additive) blending so the dark particles actually darken
+    // the sky behind them instead of adding light — kept deliberately sparse.
+    var smoke  = new Emitter(flare, { origin: V(0, oY + 0.75, 0), dir: V(0.22, 1, 0), speed: 0.9, spread: 0.26, jitter: 0.35, gravity: 0.3, color: 0x171717, size: 0.34, life: 1.8, count: 48, rate: 0, opacity: 0.0, blending: THREE.NormalBlending });
     var glow = new THREE.PointLight(0xff8a3a, 0.0, 10, 2); glow.position.set(0, oY + 0.3, 0); flare.add(glow);
     var blobOutMat = new THREE.MeshBasicMaterial({ color: 0xff6a1e, transparent: true, opacity: 0, depthWrite: false });
     var blobInMat  = new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0, depthWrite: false });
@@ -615,7 +628,7 @@
       var fl = 0.82 + 0.18 * Math.sin(flick) + 0.08 * Math.sin(flick * 2.7);
       embers.rate = (8 + 55 * fire) * fl; embers.opt.speed = 1.6 + 1.8 * fire;
       puffs.rate = (12 + 70 * fire) * fl; puffs.opt.speed = 0.8 + 1.0 * fire; puffs.opt.life = 0.5 + 0.5 * fire;
-      smoke.rate = fire > 0.4 ? (12 + 45 * fire) : 0; smoke.opt.opacity = Math.max(0, (fire - 0.4)) * 0.4;
+      smoke.rate = fire > 0.4 ? (6 + 20 * fire) : 0; smoke.opt.opacity = Math.max(0, (fire - 0.4)) * 0.55;
       glow.intensity = (0.1 + 1.7 * fire) * fl;
       // pulsing blob: overall size grows with the relief rate, and it "breathes"
       // (expands/contracts) while licking upward.
