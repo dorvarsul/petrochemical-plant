@@ -26,8 +26,9 @@ fields, never ``truth``) — at ``/`` and ``/hmi``, off the same ``/api/state``
 / ``/api/attack`` / ``/api/standdown`` / ``/api/sisreset`` / ``/api/valve`` /
 ``/api/reset`` surface, so no frontend change was needed either.
 
-Run (PC4, pointed at PC2/PC3 over the L2 — see deploy/pc4-hmi/README.md):
-    PETROTWIN_BPCS_HOST=10.0.0.12 PETROTWIN_SIS_HOST=10.0.0.13 \\
+Run (PC4, pointed at PC2/PC3 across the routed (L3) switch — see
+deploy/pc4-hmi/README.md):
+    PETROTWIN_BPCS_HOST=10.0.2.12 PETROTWIN_SIS_HOST=10.0.3.13 \\
         .venv/bin/python -m ui.hmi_server
 then open http://127.0.0.1:8093/  (PETROTWIN_HMI_BIND_HOST=0.0.0.0 to serve
 the LAN instead of just this host).

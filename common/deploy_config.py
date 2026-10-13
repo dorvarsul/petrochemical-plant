@@ -7,9 +7,10 @@ ports `common/registers.py` and `plc/docker-compose.yml` have always used) —
 importing this module changes nothing by default.
 
 Phase 2.5 (`ROADMAP.md` / `ARCHITECTURE.md` "Deployment topology") splits the
-four layers onto four physical PCs on one L2 segment. Moving a layer is then
-**one environment variable per address**, set on the PC that needs to reach it
-— no code change, no register-map change. See `deploy/README.md`.
+four layers onto four physical PCs, each layer in its own VLAN/subnet behind one
+layer-3 (routed) switch. Moving a layer is then **one environment variable per
+address**, set on the PC that needs to reach it — no code change, no register-map
+change. See `deploy/README.md`.
 
 Everyone that needs a host/port imports it from HERE, never hard-codes it:
 ``common/registers.py`` (Modbus ``ENDPOINTS``), ``plc/load_scenario.py`` and
